@@ -717,6 +717,7 @@ declare
   v_missing int;
   v_ins int := 0; v_dup int := 0; v_rej int := 0; v_total int := 0;
   v_reason text;
+  v_nver int; v_ver text; v_unknown int;
   v_publish boolean := coalesce((p_payload ->> 'publish_new_periods')::boolean, false);
 begin
   if not (public.is_super_admin() or public.is_service_role()) then
@@ -733,7 +734,8 @@ begin
     v_reason := null;
     begin
       if coalesce(r ->> 'task_link', '') !~ '^https?://' then v_reason := 'Missing or invalid DS Task Link'; end if;
-      if v_reason is null and coalesce(r ->> 'cam_email', '') !~ '^[^@\s]+@[^@\s]+$' then v_reason := 'Missing or invalid CAM email'; end if;
+      if v_reason is null and coalesce(r ->> 'cam_email', '') <> '' and (r ->> 'cam_email') !~ '^[^@\s]+@[^@\s]+$' then v_reason := 'Invalid CAM email'; end if;
+      if v_reason is null and coalesce(r ->> 'cam_email', '') = '' and coalesce(trim(r ->> 'cam_name'), '') = '' then v_reason := 'CAM email or name is required'; end if;
       if v_reason is null and not exists (select 1 from public.task_types where code = r ->> 'task_type') then
         v_reason := 'Unknown task type'; end if;
       if v_reason is null and (r -> 'period' ->> 'label') is null then v_reason := 'Missing QA Week'; end if;
@@ -742,11 +744,20 @@ begin
       if v_reason is null and coalesce((r ->> 'autofail')::boolean, false) and (r ->> 'score')::numeric <> 0 then
         v_reason := 'Autofail = Yes but score is not 0'; end if;
       if v_reason is null then
-        select count(*) into v_missing
-        from public.evaluation_parameters p
-        where p.task_type = r ->> 'task_type' and p.active
-          and not exists (select 1 from jsonb_array_elements(r -> 'scores') x where (x ->> 'parameter_id')::uuid = p.id);
-        if v_missing > 0 then v_reason := v_missing || ' scoring parameter(s) missing for this task type'; end if;
+        -- all scores must belong to this task type and to ONE rubric version, and that version must be complete
+        select count(distinct p.rubric_version), min(p.rubric_version), count(*) filter (where p.id is null)
+          into v_nver, v_ver, v_unknown
+        from jsonb_array_elements(coalesce(r -> 'scores', '[]'::jsonb)) x
+        left join public.evaluation_parameters p on p.id = (x ->> 'parameter_id')::uuid and p.task_type = r ->> 'task_type';
+        if v_unknown > 0 then v_reason := 'Scores refer to parameters of another task type';
+        elsif v_nver <> 1 then v_reason := 'Scores must come from exactly one rubric version';
+        else
+          select count(*) into v_missing
+          from public.evaluation_parameters p
+          where p.task_type = r ->> 'task_type' and p.rubric_version = v_ver and (v_ver <> 'current' or p.active)
+            and not exists (select 1 from jsonb_array_elements(r -> 'scores') x where (x ->> 'parameter_id')::uuid = p.id);
+          if v_missing > 0 then v_reason := v_missing || ' scoring parameter(s) missing for this task type'; end if;
+        end if;
       end if;
       if v_reason is null then
         select sum((x ->> 'earned')::numeric), sum(p.max_score) filter (where x ->> 'earned' is not null)
@@ -770,7 +781,11 @@ begin
       end if;
 
       -- CAM (auto-create; can log in once invited)
-      select id into v_cam from public.employees where email = lower(r ->> 'cam_email');
+      if coalesce(r ->> 'cam_email', '') = '' then
+        v_cam := public._resolve_cam_name(r ->> 'cam_name', coalesce((p_payload ->> 'is_demo')::boolean, false));
+      else
+        select id into v_cam from public.employees where email = lower(r ->> 'cam_email');
+      end if;
       if v_cam is null then
         insert into public.employees (email, full_name, role, status, is_demo)
         values (lower(r ->> 'cam_email'), coalesce(nullif(r ->> 'cam_name', ''), split_part(r ->> 'cam_email', '@', 1)), 'user', 'active',
@@ -843,6 +858,11 @@ returns trigger language plpgsql as $$
 begin
   if current_setting('app.allow_evaluation_purge', true) = 'on' and tg_op = 'DELETE' then
     return old;
+  end if;
+  -- merge_employee() may re-point an archived audit to the right CAM; nothing else may change
+  if tg_op = 'UPDATE' and tg_table_name = 'evaluations' and current_setting('app.allow_cam_merge', true) = 'on'
+     and (to_jsonb(new) - 'cam_id') = (to_jsonb(old) - 'cam_id') then
+    return new;
   end if;
   raise exception 'Original evaluation records are immutable. Use a score adjustment instead.';
 end $$;

@@ -75,8 +75,10 @@ create table public.evaluation_parameters (
   max_score      numeric(6,2) not null check (max_score > 0),
   sort_order     int not null default 0,
   source_column  text,                              -- audit form column header
+  source_aliases text[] not null default '{}',      -- older header spellings (matched loosely)
+  rubric_version text not null default 'current',   -- 'current' or e.g. '2022-23' for archived audits
   active         boolean not null default true,
-  unique (task_type, name)
+  unique (task_type, name, rubric_version)
 );
 create index evaluation_parameters_type_idx on public.evaluation_parameters (task_type);
 

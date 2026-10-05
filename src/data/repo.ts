@@ -1,7 +1,7 @@
 import type {
   Appeal, AppealDetail, AppealFilter, AuditLog, Employee, Evaluation, EvaluationFilter, ExtraAdjustmentInput,
   ImportBatch, ImportRejection, LeadRecommendation, Me, NotificationRow, Parameter, Period, PortalSettings,
-  QaDecisionInput, Role, ScoreAdjustment, SubmitAppealItem, TaskType, Team, WeeklyEmailRow, WeeklyEmailResult, TeamMappingRow, TeamMappingResult,
+  QaDecisionInput, Role, ScoreAdjustment, SubmitAppealItem, TaskType, Team, WeeklyEmailRow, WeeklyEmailResult, TeamMappingRow, TeamMappingResult, HistoricalCam, SheetSyncResult,
 } from '../lib/types';
 import type { ImportRow } from '../../supabase/functions/_shared/mapper';
 
@@ -13,7 +13,7 @@ import type { ImportRow } from '../../supabase/functions/_shared/mapper';
  *    used for the public demo only.
  */
 export interface Repo {
-  readonly mode: 'supabase' | 'demo';
+  readonly mode: 'supabase' | 'demo' | 'local';
 
   // ---- auth
   currentUser(): Promise<Me | null>;
@@ -62,11 +62,14 @@ export interface Repo {
   createParameter(p: Omit<Parameter, 'id'>): Promise<void>;
   upsertEmployee(e: Partial<Employee> & { email: string; full_name: string; role: Role }): Promise<void>;
   inviteUser(employeeId: string): Promise<void>;
+  /** Super Admin only: set a temporary password for a user (they must change it at first sign-in). */
+  setUserPassword(employeeId: string, password: string): Promise<void>;
   upsertTeam(t: Partial<Team> & { name: string }): Promise<void>;
   deleteTeam(id: string): Promise<void>;
   importEvaluations(rows: ImportRow[], meta: { source: 'csv' | 'xlsx' | 'google_sheets'; file_name: string; publish_new_periods: boolean },
     onProgress?: (done: number, total: number) => void): Promise<{ batch_id: string; total: number; inserted: number; duplicates: number; rejected: number }>;
-  syncGoogleSheet(): Promise<{ batch_id: string; total: number; inserted: number; duplicates: number; rejected: number }>;
+  /** Server-side sync (deployed portal): scope 'live' = live form, 'all' = live + archive tabs. */
+  syncGoogleSheet(scope: 'live' | 'all'): Promise<SheetSyncResult[]>;
   listImportBatches(): Promise<ImportBatch[]>;
   listImportRejections(batchId: string): Promise<ImportRejection[]>;
   listAuditLogs(opts: { limit: number; offset: number; table?: string; action?: string }): Promise<AuditLog[]>;
@@ -75,6 +78,10 @@ export interface Repo {
   weeklyEmailPreview(periodId: string): Promise<WeeklyEmailRow[]>;
   sendWeeklyEmails(periodId: string, camIds: string[] | null, resend: boolean): Promise<WeeklyEmailResult>;
   importTeamMapping(rows: TeamMappingRow[]): Promise<TeamMappingResult>;
+
+  // ---- archived (name-only) CAMs
+  historicalCams(): Promise<HistoricalCam[]>;
+  mergeEmployee(fromId: string, intoId: string): Promise<{ moved: number }>;
 
   // ---- notifications
   listNotifications(): Promise<NotificationRow[]>;

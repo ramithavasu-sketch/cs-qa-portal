@@ -21,6 +21,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
   const loc = useLocation();
   if (loading || (me && !ref)) return <Loading label="Loading portal…" />;
   if (!me) return <Navigate to="/login" replace state={{ from: loc.pathname }} />;
+  if (me.must_change_password) return <Navigate to="/reset-password" replace />;
   return <>{children}</>;
 }
 /** UI-level guard only; the database enforces the same rules (RLS + RPC checks). */

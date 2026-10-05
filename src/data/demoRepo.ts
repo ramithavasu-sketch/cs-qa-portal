@@ -26,6 +26,7 @@ interface State {
   evidence: EvidenceBlob[]; grants: Grant[]; notifications: (NotificationRow & { recipient_id: string })[]; audit: AuditLog[];
   batches: ImportBatch[]; rejections: (ImportRejection & { batch_id: string })[]; refSeq: number; auditSeq: number; passwords: Record<string, string>;
   weeklyEmails: { period_id: string; cam_id: string; to: string; cc: string | null; subject: string; status: 'sent'; queued_at: string }[];
+  aliases?: Record<string, string>; historical?: string[]; mustChange?: Record<string, boolean>;
 }
 
 const KEY = 'csqa-demo-state-v4';
@@ -48,16 +49,94 @@ function addBusinessDays(from: Date, days: number) {
   return d;
 }
 
+// ---- IndexedDB persistence for local review mode (real data can be far larger than localStorage allows)
+const IDB_NAME = 'csqa-local-review';
+function idb(): Promise<IDBDatabase> {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(IDB_NAME, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('state');
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function idbGet<T>(key: string): Promise<T | undefined> {
+  const db = await idb();
+  return new Promise((res, rej) => { const t = db.transaction('state').objectStore('state').get(key); t.onsuccess = () => res(t.result as T); t.onerror = () => rej(t.error); });
+}
+async function idbPut(key: string, value: unknown): Promise<void> {
+  const db = await idb();
+  return new Promise((res, rej) => { const t = db.transaction('state', 'readwrite'); t.objectStore('state').put(value, key); t.oncomplete = () => res(); t.onerror = () => rej(t.error); });
+}
+async function idbClear(): Promise<void> {
+  const db = await idb();
+  return new Promise((res, rej) => { const t = db.transaction('state', 'readwrite'); t.objectStore('state').clear(); t.oncomplete = () => res(); t.onerror = () => rej(t.error); });
+}
+async function sha256(text: string) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 export class DemoRepo implements Repo {
-  readonly mode = 'demo' as const;
+  readonly mode: 'demo' | 'local';
   private s!: State;
   private meId: string | null = null;
   private listeners = new Set<(e: 'SIGNED_IN' | 'SIGNED_OUT' | 'PASSWORD_RECOVERY') => void>();
+  readonly ready: Promise<void>;
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor() {
-    this.load();
-    try { this.meId = sessionStorage.getItem(SESSION_KEY); } catch { this.meId = null; }
+  /**
+   * mode 'demo'  — fictional data, localStorage.
+   * mode 'local' — "local review mode": starts EMPTY (no fictional data), one Super Admin
+   *                created on first run, real audits loaded from the Google Sheet CSV,
+   *                everything kept in IndexedDB in this browser on this computer only.
+   */
+  constructor(mode: 'demo' | 'local' = 'demo') {
+    this.mode = mode;
+    if (mode === 'demo') { this.load(); this.ready = Promise.resolve(); }
+    else this.ready = this.loadLocal();
+    try { this.meId = sessionStorage.getItem(SESSION_KEY + (mode === 'local' ? '-local' : '')); } catch { this.meId = null; }
   }
+
+  private emptyState(): State {
+    const seed = generateDemoSeed();
+    return {
+      version: 4, createdAt: nowIso(), weeklyEmails: [], employees: [], teams: [], taskTypes: seed.taskTypes, parameters: seed.parameters,
+      settings: seed.settings, periods: [], evaluations: [], adjustments: [], appeals: [], items: [], events: [],
+      evidence: [], grants: [], notifications: [], audit: [], batches: [], rejections: [], refSeq: 1001, auditSeq: 1, passwords: {},
+    };
+  }
+  private async loadLocal() {
+    try { this.s = (await idbGet<State>('state')) ?? this.emptyState(); } catch { this.s = this.emptyState(); }
+    this.upgradeState();
+  }
+  /** Data saved by an older version of the portal: add settings, parameters and fields introduced since. */
+  private upgradeState() {
+    const seed = generateDemoSeed();
+    const s = this.s as Partial<State> & State;
+    s.settings = { ...seed.settings, ...(s.settings ?? {}) } as PortalSettings;
+    const ds = s.settings.data_sources as PortalSettings['data_sources'] | undefined;
+    if (!ds || !Array.isArray(ds.sources) || !ds.sources.length) s.settings.data_sources = seed.settings.data_sources;
+    s.taskTypes = [...(s.taskTypes ?? []), ...seed.taskTypes.filter((t) => !(s.taskTypes ?? []).some((x) => x.code === t.code))];
+    s.parameters = [...(s.parameters ?? []), ...seed.parameters.filter((p) => !(s.parameters ?? []).some((x) => x.id === p.id))];
+    for (const k of ['weeklyEmails', 'employees', 'teams', 'periods', 'evaluations', 'adjustments', 'appeals', 'items', 'events', 'evidence', 'grants', 'notifications', 'audit', 'batches', 'rejections'] as const)
+      (s as unknown as Record<string, unknown[]>)[k] ??= [];
+    s.passwords ??= {}; s.mustChange ??= {}; s.aliases ??= {}; s.historical ??= [];
+    s.refSeq ??= 1001; s.auditSeq ??= 1;
+  }
+  /** Local mode: is a Super Admin set up yet? */
+  needsSetup() { return this.mode === 'local' && !this.s.employees.some((e) => e.role === 'super_admin'); }
+  async setupLocalAdmin(name: string, email: string, password: string) {
+    await this.ready;
+    this.require(this.needsSetup(), 'A Super Admin already exists');
+    this.require(/^[^@\s]+@[^@\s]+$/.test(email.trim()), 'Enter a valid email address');
+    this.require(password.length >= 10, 'Use at least 10 characters for the password');
+    const e: Employee = { id: uid(), email: email.trim().toLowerCase(), full_name: name.trim() || email, role: 'super_admin', status: 'active', team_id: null };
+    this.s.employees.push(e);
+    this.s.passwords[e.email] = 'sha256:' + (await sha256(password));
+    this.save();
+    await this.signIn(e.email, password);
+  }
+  async deleteLocalData() { await idbClear(); this.s = this.emptyState(); await this.signOut(); }
 
   // ------------------------------------------------------------------ state
   private load() {
@@ -66,14 +145,21 @@ export class DemoRepo implements Repo {
       if (raw) {
         const st = JSON.parse(raw) as State;
         // regenerate if the stored demo is older than 6 days (keeps weeks current)
-        if (st.version === 4 && Date.now() - Date.parse(st.createdAt) < 6 * 86400000) { this.s = st; return; }
+        if (st.version === 4 && Date.now() - Date.parse(st.createdAt) < 6 * 86400000) { this.s = st; this.upgradeState(); return; }
       }
     } catch { /* storage unavailable */ }
     this.reset();
   }
   private save() {
+    if (this.mode === 'local') {
+      if (this.saveTimer) clearTimeout(this.saveTimer);
+      this.saveTimer = setTimeout(() => { idbPut('state', this.s).catch((e) => console.error('Could not save local data', e)); }, 150);
+      return;
+    }
     try { localStorage.setItem(KEY, JSON.stringify(this.s)); } catch { /* quota or disabled: keep in memory */ }
   }
+  /** Resolves once pending local writes have reached IndexedDB. */
+  async flush() { if (this.mode === 'local') { if (this.saveTimer) clearTimeout(this.saveTimer); await idbPut('state', this.s); } }
   reset() {
     const seed = generateDemoSeed();
     this.s = {
@@ -288,8 +374,67 @@ export class DemoRepo implements Repo {
     return a!;
   }
 
+  // ------------------------------------------------------------------ archived names (mirrors _resolve_cam_name / merge_employee)
+  private nameKey(n: string) { return n.trim().replace(/\s+/g, ' ').toLowerCase(); }
+  private resolveCamName(name: string): Employee {
+    const k = this.nameKey(name);
+    this.s.aliases ??= {}; this.s.historical ??= [];
+    const aliased = this.s.aliases[k] && this.s.employees.find((e) => e.id === this.s.aliases![k]);
+    if (aliased) return aliased;
+    const exact = this.s.employees.filter((e) => e.role === 'user' && this.nameKey(e.full_name) === k);
+    if (exact.length === 1) { this.s.aliases[k] = exact[0].id; return exact[0]; }
+    const email = `historical.${k.replace(/[^a-z0-9]+/g, '.')}@cam-email-needed.invalid`;
+    let h = this.s.employees.find((e) => e.email === email);
+    if (!h) {
+      h = { id: uid(), email, full_name: name.trim(), role: 'user', status: 'inactive', team_id: null, is_demo: this.mode === 'demo' };
+      this.s.employees.push(h); this.s.historical.push(h.id);
+    }
+    this.s.aliases[k] = h.id;
+    return h;
+  }
+  async historicalCams() {
+    this.requireSuper('Only QA can manage historical names');
+    const hist = new Set(this.s.historical ?? []);
+    const counts = new Map<string, { n: number; first: string; last: string }>();
+    const plabel = new Map(this.s.periods.map((p) => [p.id, p]));
+    for (const e of this.s.evaluations) {
+      if (!hist.has(e.cam_id)) continue;
+      const p = plabel.get(e.period_id)!; const c = counts.get(e.cam_id) ?? { n: 0, first: p.start_date, last: p.start_date };
+      c.n++; if (p.start_date < c.first) c.first = p.start_date; if (p.start_date > c.last) c.last = p.start_date; counts.set(e.cam_id, c);
+    }
+    const lbl = (d: string) => { const p = this.s.periods.find((x) => x.start_date === d); return p ? `${p.short_label} ${p.year}` : d; };
+    return this.s.employees.filter((e) => hist.has(e.id)).map((h) => {
+      const [first, init = ''] = this.nameKey(h.full_name).split(' ');
+      const candidates = this.s.employees.filter((c) => c.role === 'user' && !hist.has(c.id)).filter((c) => {
+        const [f, l = ''] = c.email.split('@')[0].split('.');
+        return f === first && (!init || l.startsWith(init[0]));
+      }).map((c) => ({ id: c.id, name: c.full_name, email: c.email }));
+      const c = counts.get(h.id);
+      return { id: h.id, name: h.full_name, tasks: c?.n ?? 0, first_week: c ? lbl(c.first) : null, last_week: c ? lbl(c.last) : null, candidates };
+    }).sort((a, b) => b.tasks - a.tasks);
+  }
+  async mergeEmployee(fromId: string, intoId: string) {
+    this.requireSuper('Only QA can link historical names');
+    const f = this.s.employees.find((e) => e.id === fromId); const t = this.s.employees.find((e) => e.id === intoId);
+    this.require(!!f && !!t, 'CAM not found');
+    this.require((this.s.historical ?? []).includes(fromId), 'Only historical (name-only) records can be merged');
+    this.require(fromId !== intoId, 'Choose a different CAM');
+    let moved = 0;
+    for (const e of this.s.evaluations) if (e.cam_id === fromId) { e.cam_id = intoId; moved++; }
+    for (const a of this.s.appeals) if (a.cam_id === fromId) a.cam_id = intoId;
+    this.s.aliases ??= {};
+    for (const [k, v] of Object.entries(this.s.aliases)) if (v === fromId) this.s.aliases[k] = intoId;
+    this.s.aliases[this.nameKey(f!.full_name)] = intoId;
+    this.s.employees = this.s.employees.filter((e) => e.id !== fromId);
+    this.s.historical = (this.s.historical ?? []).filter((x) => x !== fromId);
+    this.log('merge_employee', 'employees', intoId, { historical_name: f!.full_name }, { into: t!.full_name, evaluations_moved: moved });
+    this.save();
+    return { moved };
+  }
+
   // ------------------------------------------------------------------ auth
   async currentUser(): Promise<Me | null> {
+    await this.ready;
     await delay(10);
     const e = this.meOrNull();
     return e ? this.toMe(e) : null;
@@ -297,28 +442,34 @@ export class DemoRepo implements Repo {
   private toMe(e: Employee): Me {
     const team = e.team_id ? this.s.teams.find((t) => t.id === e.team_id) : undefined;
     const lead = team?.lead_id ? this.s.employees.find((x) => x.id === team.lead_id) : undefined;
-    return { ...clone(e), team_name: team?.name ?? null, lead_name: lead?.full_name ?? null };
+    return { ...clone(e), team_name: team?.name ?? null, lead_name: lead?.full_name ?? null, must_change_password: !!this.s.mustChange?.[e.email] };
   }
   async signIn(email: string, password: string) {
+    await this.ready;
     await delay(250);
     const e = this.s.employees.find((x) => x.email === email.trim().toLowerCase());
-    if (!e || (this.s.passwords[e.email] ?? DEMO_PASSWORD) !== password) throw new Error('Incorrect email or password.');
+    const stored = e ? this.s.passwords[e.email] ?? (this.mode === 'demo' ? DEMO_PASSWORD : undefined) : undefined;
+    const ok = stored !== undefined && (stored.startsWith('sha256:') ? stored === 'sha256:' + (await sha256(password)) : stored === password);
+    if (e && stored === undefined && this.mode === 'local') throw new Error('No password has been set for this account yet. Ask the QA team to set one.');
+    if (!e || !ok) throw new Error('Incorrect email or password.');
     if (e.status !== 'active') throw new Error('Your login is not linked to an active portal account. Please contact the QA team.');
     this.meId = e.id;
-    try { sessionStorage.setItem(SESSION_KEY, e.id); } catch { /* ignore */ }
+    try { sessionStorage.setItem(SESSION_KEY + (this.mode === 'local' ? '-local' : ''), e.id); } catch { /* ignore */ }
     this.listeners.forEach((l) => l('SIGNED_IN'));
     return this.toMe(e);
   }
   async signOut() {
     this.meId = null;
-    try { sessionStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
+    try { sessionStorage.removeItem(SESSION_KEY + (this.mode === 'local' ? '-local' : '')); } catch { /* ignore */ }
     this.listeners.forEach((l) => l('SIGNED_OUT'));
   }
   async requestPasswordReset() { await delay(300); }
   async updatePassword(password: string) {
     const me = this.me();
     this.require(password.length >= 10, 'Password must be at least 10 characters');
-    this.s.passwords[me.email] = password; this.save();
+    this.s.passwords[me.email] = this.mode === 'local' ? 'sha256:' + (await sha256(password)) : password;
+    if (this.s.mustChange) delete this.s.mustChange[me.email];
+    this.save();
   }
   onAuthEvent(cb: (e: 'SIGNED_IN' | 'SIGNED_OUT' | 'PASSWORD_RECOVERY') => void) { this.listeners.add(cb); return () => { this.listeners.delete(cb); }; }
 
@@ -761,7 +912,7 @@ export class DemoRepo implements Repo {
       this.log('update', 'employees', row.id, prev, clone(row));
     } else {
       const row: Employee = { id: uid(), status: 'active', team_id: null, ...e, email, is_demo: true };
-      this.s.employees.push(row); this.s.passwords[email] = DEMO_PASSWORD;
+      this.s.employees.push(row); if (this.mode === 'demo') this.s.passwords[email] = DEMO_PASSWORD;
       this.log('insert', 'employees', row.id, null, row);
     }
     this.save();
@@ -771,6 +922,21 @@ export class DemoRepo implements Repo {
     this.requireSuper();
     const e = this.s.employees.find((x) => x.id === employeeId)!;
     this.log('invite', 'employees', e.id, null, { email: e.email, note: 'Demo mode: no email is sent. Password is ' + DEMO_PASSWORD });
+    this.save();
+  }
+  async setUserPassword(employeeId: string, password: string) {
+    await delay(150);
+    this.requireSuper(); const me = this.me();
+    const e = this.s.employees.find((x) => x.id === employeeId);
+    this.require(!!e, 'User not found');
+    this.require(e!.id !== me.id, 'Change your own password from the sign-in page instead');
+    this.require(e!.status === 'active', 'Reactivate the user before setting a password');
+    this.require(!e!.email.endsWith('.invalid'), 'Add this person’s real email address before setting a password');
+    this.require(password.length >= 10 && /[A-Za-z]/.test(password) && /\d/.test(password), 'Use at least 10 characters with a letter and a number');
+    this.s.passwords[e!.email] = 'sha256:' + (await sha256(password));
+    (this.s.mustChange ??= {})[e!.email] = true;
+    e!.auth_user_id ??= 'local:' + e!.id; // marks that this person now has a login
+    this.log('set_password', 'employees', e!.id, null, { email: e!.email, note: 'Temporary password set by QA; the user must change it at first sign-in. The password itself is not stored in the log.' });
     this.save();
   }
   async upsertTeam(t: Partial<Team> & { name: string }) {
@@ -798,20 +964,35 @@ export class DemoRepo implements Repo {
     const batch: ImportBatch = { id: uid(), source: meta.source, file_name: meta.file_name, uploaded_by: me.id, total_rows: 0, inserted: 0, duplicates: 0, rejected: 0, created_at: nowIso() };
     this.s.batches.unshift(batch);
     const reject = (row_number: number, reason: string) => { batch.rejected++; this.s.rejections.push({ batch_id: batch.id, row_number, reason }); };
+    const seen = new Set(this.s.evaluations.map((e) => `${e.task_link}|${e.cam_id}|${e.period_id}`));
+    const NOT_A_LEAD = /^(no longer with company|moved to different team|n\/?a|-)?$/i;
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
       batch.total_rows++;
-      const params = this.s.parameters.filter((p) => p.task_type === r.task_type && p.active);
       if (!this.s.taskTypes.some((t) => t.code === r.task_type)) { reject(r.row_number, 'Unknown task type'); continue; }
+      const provided = r.scores.map((x) => this.s.parameters.find((p) => p.id === x.parameter_id && p.task_type === r.task_type));
+      if (provided.some((p) => !p)) { reject(r.row_number, 'Scores refer to parameters of another task type'); continue; }
+      const versions = new Set(provided.map((p) => p!.rubric_version ?? 'current'));
+      if (versions.size !== 1) { reject(r.row_number, 'Scores must come from exactly one rubric version'); continue; }
+      const ver = [...versions][0];
+      const params = this.s.parameters.filter((p) => p.task_type === r.task_type && (p.rubric_version ?? 'current') === ver && (ver !== 'current' || p.active));
       const missing = params.filter((p) => !r.scores.some((x) => x.parameter_id === p.id)).length;
       if (missing) { reject(r.row_number, `${missing} scoring parameter(s) missing for this task type`); continue; }
-      let cam = this.s.employees.find((e) => e.email === r.cam_email.toLowerCase());
+      let cam = r.cam_email ? this.s.employees.find((e) => e.email === r.cam_email.toLowerCase()) : this.resolveCamName(r.cam_name ?? '');
       if (!cam) {
-        cam = { id: uid(), email: r.cam_email.toLowerCase(), full_name: r.cam_name ?? r.cam_email, role: 'user', status: 'active', team_id: null, is_demo: true };
-        this.s.employees.push(cam); this.s.passwords[cam.email] = DEMO_PASSWORD;
+        cam = { id: uid(), email: r.cam_email.toLowerCase(), full_name: r.cam_name ?? r.cam_email, role: 'user', status: 'active', team_id: null, is_demo: this.mode === 'demo' };
+        this.s.employees.push(cam); if (this.mode === 'demo') this.s.passwords[cam.email] = DEMO_PASSWORD;
       }
-      if (r.lead_name && !cam.team_id) {
-        const t = this.s.teams.find((x) => this.s.employees.find((e) => e.id === x.lead_id)?.full_name.toLowerCase() === r.lead_name!.trim().toLowerCase());
+      if (r.lead_name && !cam.team_id && cam.status === 'active' && !NOT_A_LEAD.test(r.lead_name.trim())) {
+        let t = this.s.teams.find((x) => this.s.employees.find((e) => e.id === x.lead_id)?.full_name.toLowerCase() === r.lead_name!.trim().toLowerCase());
+        if (!t && this.mode === 'local') {
+          // Local review: create the Lead + team from the sheet's Lead Name; the email is filled in later via the mapping import.
+          const slug = r.lead_name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '.');
+          const lead: Employee = { id: uid(), email: `${slug}@lead-email-needed.invalid`, full_name: r.lead_name.trim(), role: 'admin', status: 'active', team_id: null };
+          this.s.employees.push(lead);
+          t = { id: uid(), name: `Team ${lead.full_name}`, lead_id: lead.id };
+          this.s.teams.push(t);
+        }
         if (t) cam.team_id = t.id;
       }
       let period = this.s.periods.find((p) => p.label === r.period.label);
@@ -820,7 +1001,9 @@ export class DemoRepo implements Repo {
           end_date: r.period.end, status: meta.publish_new_periods ? 'published' : 'draft', published_at: meta.publish_new_periods ? nowIso() : null, auto_publish_at: null };
         this.s.periods.push(period);
       }
-      if (this.s.evaluations.some((e) => e.task_link === r.task_link && e.cam_id === cam!.id && e.period_id === period!.id)) { batch.duplicates++; continue; }
+      const key = `${r.task_link}|${cam.id}|${period.id}`;
+      if (seen.has(key)) { batch.duplicates++; continue; }
+      seen.add(key);
       const evaluator = r.evaluator_email ? this.s.employees.find((e) => e.email === r.evaluator_email) : undefined;
       this.s.evaluations.push({
         id: uid(), task_id: r.task_id, task_link: r.task_link, cam_id: cam.id, evaluator_id: evaluator?.id ?? null, evaluator_email: r.evaluator_email,
@@ -837,7 +1020,8 @@ export class DemoRepo implements Repo {
     this.save();
     return { batch_id: batch.id, total: batch.total_rows, inserted: batch.inserted, duplicates: batch.duplicates, rejected: batch.rejected };
   }
-  async syncGoogleSheet(): Promise<never> {
+  async syncGoogleSheet(_scope: 'live' | 'all'): Promise<never> {
+    void _scope;
     throw new Error('Google Sheets sync needs the sheets-sync Edge Function and a service account. It is not available in the demo — use CSV/XLSX upload instead.');
   }
   async listImportBatches() { this.requireSuper(); return clone(this.s.batches); }
@@ -892,14 +1076,16 @@ export class DemoRepo implements Repo {
     for (const r of rows) {
       res.rows++;
       if (!valid(r.cam_email) || !valid(r.lead_email)) { res.rejected++; res.errors.push({ row: res.rows, reason: 'CAM email and Lead email are required' }); continue; }
-      let lead = this.s.employees.find((e) => e.email === r.lead_email.trim().toLowerCase());
-      if (!lead) { lead = { id: uid(), email: r.lead_email.trim().toLowerCase(), full_name: r.lead_name?.trim() || r.lead_email.split('@')[0], role: 'admin', status: 'active', team_id: null, is_demo: true }; this.s.employees.push(lead); this.s.passwords[lead.email] = DEMO_PASSWORD; res.new_leads++; }
+      let lead = this.s.employees.find((e) => e.email === r.lead_email.trim().toLowerCase())
+        ?? this.s.employees.find((e) => e.email.endsWith('@lead-email-needed.invalid') && !!r.lead_name && e.full_name.toLowerCase() === r.lead_name.trim().toLowerCase());
+      if (lead && lead.email.endsWith('@lead-email-needed.invalid')) lead.email = r.lead_email.trim().toLowerCase();
+      if (!lead) { lead = { id: uid(), email: r.lead_email.trim().toLowerCase(), full_name: r.lead_name?.trim() || r.lead_email.split('@')[0], role: 'admin', status: 'active', team_id: null, is_demo: true }; this.s.employees.push(lead); if (this.mode === 'demo') this.s.passwords[lead.email] = DEMO_PASSWORD; res.new_leads++; }
       else if (lead.role === 'user') lead.role = 'admin';
       const tname = r.team?.trim() || `Team ${lead.full_name}`;
       let team = this.s.teams.find((t) => t.name.toLowerCase() === tname.toLowerCase());
       if (!team) { team = { id: uid(), name: tname, lead_id: lead.id }; this.s.teams.push(team); res.new_teams++; } else team.lead_id = lead.id;
       let cam = this.s.employees.find((e) => e.email === r.cam_email.trim().toLowerCase());
-      if (!cam) { cam = { id: uid(), email: r.cam_email.trim().toLowerCase(), full_name: r.cam_name?.trim() || r.cam_email.split('@')[0], role: 'user', status: 'active', team_id: team.id, is_demo: true }; this.s.employees.push(cam); this.s.passwords[cam.email] = DEMO_PASSWORD; res.new_cams++; }
+      if (!cam) { cam = { id: uid(), email: r.cam_email.trim().toLowerCase(), full_name: r.cam_name?.trim() || r.cam_email.split('@')[0], role: 'user', status: 'active', team_id: team.id, is_demo: true }; this.s.employees.push(cam); if (this.mode === 'demo') this.s.passwords[cam.email] = DEMO_PASSWORD; res.new_cams++; }
       else if (cam.team_id !== team.id) { cam.team_id = team.id; res.reassigned++; }
     }
     this.log('import', 'teams', null, null, res);

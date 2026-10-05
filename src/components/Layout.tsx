@@ -6,7 +6,8 @@ import {
   CalendarCog, Upload, ScrollText, Mail, LogOut, Menu, X, ShieldCheck,
 } from 'lucide-react';
 import { useApp, useAsync } from '../app/context';
-import { repo, demoRepo } from '../data';
+import { repo, demoRepo, localRepo } from '../data';
+import { AutoSheetSync } from './SheetSync';
 import { fmtDateTime } from '../lib/metrics';
 
 const ROLE_LABEL = { super_admin: 'QA · Super Admin', admin: 'Team Lead · Admin', user: 'CAM · User' } as const;
@@ -67,6 +68,8 @@ export default function Layout() {
 
       <div className="flex min-w-0 flex-1 flex-col lg:pl-64">
         {demoRepo && <DemoBanner />}
+        {localRepo && <LocalBanner />}
+        {localRepo && isSuper && <AutoSheetSync />}
         <header className="sticky z-20 flex h-14 items-center gap-3 border-b border-line bg-surface/95 px-4 backdrop-blur" style={{ top: 'env(safe-area-inset-top, 0px)' }}>
           <button className="lg:hidden" onClick={() => setOpen(true)} aria-label="Open menu"><Menu className="h-5 w-5" /></button>
           <div className="min-w-0 flex-1 truncate text-[13px] text-muted">
@@ -148,6 +151,23 @@ function DemoBanner() {
           <button className="underline" onClick={() => setConfirm(false)}>Cancel</button>
         </span>
       ) : <button className="font-semibold underline" onClick={() => setConfirm(true)}>Reset demo data</button>}
+    </div>
+  );
+}
+
+function LocalBanner() {
+  const { signOut } = useApp();
+  const [confirm, setConfirm] = useState(false);
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 bg-info-soft px-4 py-1.5 text-[12.5px] text-info">
+      <strong>Local review mode</strong>
+      <span>Real audit data, stored only in this browser on this computer. Only you, and people you set a password for, can sign in — on this computer only. No emails are sent.</span>
+      {confirm ? (
+        <span className="flex gap-2">
+          <button className="font-semibold underline" onClick={async () => { await localRepo!.deleteLocalData(); await signOut(); location.reload(); }}>Yes, delete everything</button>
+          <button className="underline" onClick={() => setConfirm(false)}>Cancel</button>
+        </span>
+      ) : <button className="font-semibold underline" onClick={() => setConfirm(true)}>Delete local data</button>}
     </div>
   );
 }

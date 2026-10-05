@@ -80,7 +80,7 @@ export default function QaDashboard() {
       <ErrorBox error={data.error} />
       {data.loading ? <Loading /> : (<>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-          <Kpi label="CAMs Evaluated" value={active.length} sub={`of ${cams.length} active CAMs`} />
+          <Kpi label="CAMs Evaluated" value={active.length} sub={`of ${cams.filter((c) => c.status === 'active').length} active CAMs`} />
           <Kpi label="Tasks Audited" value={S.tasks} sub={`${P.tasks} previous`} />
           <Kpi label="Overall QA Score" term="Average QA Score" value={fmtPct(S.avg)} tone={band(S.avg, s) === 'green' ? 'good' : band(S.avg, s) === 'amber' ? 'warn' : band(S.avg, s) === 'red' ? 'bad' : 'neutral'} sub={<Variance value={variance(S.avg, P.avg)} />} />
           <Kpi label="Total Autofails" value={S.autofails} tone={S.autofails ? 'bad' : 'neutral'} sub={S.autofailRate === null ? '—' : `${S.autofailRate.toFixed(2)}% of tasks`} />

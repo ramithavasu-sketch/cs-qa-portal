@@ -1,6 +1,6 @@
 // Deterministic FICTIONAL demo dataset. No real employee or performance data.
 // Weeks are anchored to the date the demo is opened so the appeal windows stay live.
-import { PARAMETERS, TASK_TYPES, DEFAULT_SETTINGS, type TaskTypeCode } from '../../supabase/functions/_shared/rubric';
+import { PARAMETERS, TASK_TYPES, DEFAULT_SETTINGS, buildDataSources, type TaskTypeCode } from '../../supabase/functions/_shared/rubric';
 import { formatWeekLabel } from '../../supabase/functions/_shared/mapper';
 import type { Employee, Parameter, Period, PortalSettings, TaskType, Team } from '../lib/types';
 
@@ -123,6 +123,8 @@ function isoWeekNumber(d: Date) {
 export function generateDemoSeed(today = new Date(), weeks = 12): DemoSeed {
   const r = rng(20260929);
   const settings = structuredClone(DEFAULT_SETTINGS);
+  const env = (import.meta as { env?: Record<string, string | undefined> }).env;
+  settings.data_sources.sources = buildDataSources({ liveSheetId: env?.VITE_LIVE_SHEET_ID, liveGid: env?.VITE_LIVE_SHEET_GID, archiveSheetId: env?.VITE_ARCHIVE_SHEET_ID });
   const employees: Employee[] = [];
   const teams: Team[] = [];
   const passwords: Record<string, string> = {};
@@ -143,7 +145,7 @@ export function generateDemoSeed(today = new Date(), weeks = 12): DemoSeed {
   for (const e of employees) passwords[e.email] = DEMO_PASSWORD;
 
   const taskTypes: TaskType[] = TASK_TYPES.map((t) => ({ code: t.code, name: t.name, source_label: t.sourceLabel, feedback_column: t.feedbackColumn, fcr_column: t.fcrColumn, sort_order: t.sortOrder, active: true }));
-  const parameters: Parameter[] = PARAMETERS.map((p) => ({ id: p.id, task_type: p.taskType, name: p.name, section: p.section, max_score: p.maxScore, sort_order: p.sortOrder, source_column: p.sourceColumn, active: true }));
+  const parameters: Parameter[] = PARAMETERS.map((p) => ({ id: p.id, task_type: p.taskType, name: p.name, section: p.section, max_score: p.maxScore, sort_order: p.sortOrder, source_column: p.sourceColumn, active: p.active !== false, rubric_version: p.rubricVersion ?? 'current', source_aliases: p.aliases ?? [] }));
 
   // Periods: `weeks` published weeks ending with last week, plus the in-progress week (draft).
   const thisWeek = currentWeekStart(today, settings.reporting.week_start_dow);
@@ -163,7 +165,7 @@ export function generateDemoSeed(today = new Date(), weeks = 12): DemoSeed {
   }
 
   const evaluations: RawEvaluation[] = [];
-  const paramsByType = (code: string) => parameters.filter((p) => p.task_type === code);
+  const paramsByType = (code: string) => parameters.filter((p) => p.task_type === code && p.active);
   periods.forEach((period, wi) => {
     const isDraft = period.status === 'draft';
     camEmps.forEach((cam, ci) => {

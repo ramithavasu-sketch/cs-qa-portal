@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ShieldCheck } from 'lucide-react';
 import { useApp } from '../app/context';
-import { repo, demoRepo } from '../data';
+import { repo, demoRepo, localRepo } from '../data';
 import { DEMO_PASSWORD } from '../demo/generate';
 import { Button, ErrorBox, Field, inputCls } from '../components/ui';
 
@@ -27,7 +27,36 @@ function Shell({ children, title, subtitle }: { children: React.ReactNode; title
   );
 }
 
+function LocalSetup() {
+  const nav = useNavigate();
+  const { signIn } = useApp();
+  const [name, setName] = useState(''); const [email, setEmail] = useState(''); const [pw, setPw] = useState(''); const [pw2, setPw2] = useState('');
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState<unknown>(null);
+  return (
+    <Shell title="Set up local review" subtitle="Create your Super Admin login for this computer. Your audit data will be stored only in this browser.">
+      <form className="flex flex-col gap-4" onSubmit={async (e) => {
+        e.preventDefault(); setErr(null);
+        if (pw !== pw2) return setErr(new Error('The two passwords do not match.'));
+        setBusy(true);
+        try { await localRepo!.setupLocalAdmin(name, email, pw); await signIn(email, pw); nav('/admin/import', { replace: true }); } catch (x) { setErr(x); } finally { setBusy(false); }
+      }}>
+        <Field label="Your name" htmlFor="ls-name"><input id="ls-name" className={inputCls} value={name} onChange={(e) => setName(e.target.value)} required /></Field>
+        <Field label="Company email" htmlFor="ls-email"><input id="ls-email" type="email" className={inputCls} value={email} onChange={(e) => setEmail(e.target.value)} required /></Field>
+        <Field label="Password (at least 10 characters)" htmlFor="ls-pw"><input id="ls-pw" type="password" autoComplete="new-password" className={inputCls} value={pw} onChange={(e) => setPw(e.target.value)} required /></Field>
+        <Field label="Confirm password" htmlFor="ls-pw2"><input id="ls-pw2" type="password" autoComplete="new-password" className={inputCls} value={pw2} onChange={(e) => setPw2(e.target.value)} required /></Field>
+        <ErrorBox error={err} />
+        <Button type="submit" loading={busy}>Create Super Admin and continue</Button>
+      </form>
+    </Shell>
+  );
+}
+
 export function LoginPage() {
+  if (localRepo?.needsSetup()) return <LocalSetup />;
+  return <LoginForm />;
+}
+
+function LoginForm() {
   const { signIn, signedOutReason } = useApp();
   const nav = useNavigate();
   const [email, setEmail] = useState('');
@@ -42,7 +71,7 @@ export function LoginPage() {
   const accounts = demoRepo?.demoAccounts() ?? [];
   const group = (r: string) => accounts.filter((a) => a.role === r);
   return (
-    <Shell title="Sign in" subtitle="Use your company email and portal password.">
+    <Shell title="Sign in" subtitle={localRepo ? 'Local review mode — Super Admin only. Data stays in this browser on this computer.' : 'Use your company email and portal password.'}>
       {signedOutReason && <p className="mb-4 rounded bg-info-soft px-3 py-2 text-[13px] text-info">{signedOutReason}</p>}
       <form onSubmit={submit} className="flex flex-col gap-4">
         <Field label="Company email" htmlFor="login-email">
@@ -110,20 +139,25 @@ export function ForgotPasswordPage() {
 
 export function ResetPasswordPage() {
   const nav = useNavigate();
-  const { setRecovery } = useApp();
+  const { setRecovery, me, refreshMe } = useApp();
+  const firstLogin = !!me?.must_change_password;
   const [pw, setPw] = useState('');
   const [pw2, setPw2] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const strong = pw.length >= 10 && /[A-Za-z]/.test(pw) && /\d/.test(pw);
   return (
-    <Shell title="Choose a new password" subtitle="At least 10 characters, including a letter and a number.">
+    <Shell title={firstLogin ? 'Set your own password' : 'Choose a new password'} subtitle={firstLogin
+      ? 'You signed in with a temporary password from the QA team. Choose your own to continue — at least 10 characters, including a letter and a number.'
+      : 'At least 10 characters, including a letter and a number.'}>
       <form className="flex flex-col gap-4" onSubmit={async (e) => {
         e.preventDefault(); setErr(null);
         if (!strong) return setErr(new Error('Use at least 10 characters with a letter and a number.'));
         if (pw !== pw2) return setErr(new Error('The two passwords do not match.'));
         setBusy(true);
-        try { await repo.updatePassword(pw); setRecovery(false); nav('/', { replace: true }); } catch (x) { setErr(x); } finally { setBusy(false); }
+        try {
+          await repo.updatePassword(pw); setRecovery(false); await refreshMe(); nav('/', { replace: true });
+        } catch (x) { setErr(x); } finally { setBusy(false); }
       }}>
         <Field label="New password" htmlFor="reset-pw"><input id="reset-pw" type="password" autoComplete="new-password" className={inputCls} value={pw} onChange={(e) => setPw(e.target.value)} /></Field>
         <Field label="Confirm new password" htmlFor="reset-pw2"><input id="reset-pw2" type="password" autoComplete="new-password" className={inputCls} value={pw2} onChange={(e) => setPw2(e.target.value)} /></Field>

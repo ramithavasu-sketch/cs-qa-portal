@@ -46,6 +46,7 @@ e2e/                      Playwright smoke + appeal-workflow tests against the d
 ## 2. Security model
 
 * **Authentication**: Supabase Auth with email and password, PKCE flow, password reset by email, and sign-out after inactivity (`VITE_IDLE_TIMEOUT_MINUTES`, default 30). Accounts are **invite-only**: sign-ups are disabled in `config.toml`, and a login with no active `employees` row sees nothing.
+* **Temporary passwords** (Users & Roles → *Set password*, Super Admin only; the `admin-users` Edge Function re-checks the role): an alternative to invitation emails. The portal generates a strong password, shows it **once** so QA can pass it on privately, and keeps only a hashed copy. It is never written to the audit log (only the fact that it was set). The user must choose their own password at first sign-in. In local review mode such users can sign in on that computer only.
 * **Authorisation in the database**. Hiding things in the UI is not the protection:
   * `my_employee_id()`, `my_role()`, `is_lead_of()` and `can_view_*()` are SECURITY DEFINER helpers used by the RLS policies.
   * **CAM**: sees only their own evaluations, and only in *published* weeks. Sees only their own appeals and notifications. Never sees internal comments.
@@ -71,6 +72,51 @@ The rules were derived from *New QA Live Task Audit Form (Responses)* and checke
   The weights can be edited under *Scoring Configuration*. `CS_QA_Guidelines_v3` proposes different weights (FCR scored at 10, Chat Professionalism at 15). When the audit form changes, update the parameters there.
 * The unique audit key is **DS Task Link + CAM + QA Week**, because the same link can legitimately appear in more than one week. Re-importing the whole sheet is therefore safe.
 * Import validation rejects rows where the recorded Score doesn't equal the parameter total, so the portal never disagrees with the sheet. On the current sheet this flags **10 rows**, for example a *Tone of Voice* score of 20 against a maximum of 10. It also finds **73 exact duplicate rows**.
+
+## 3a. Local review mode (your real data, on your computer only)
+
+Use this to review everything with live data before anyone else gets access:
+```bash
+npm install
+npm run local        # then open http://localhost:5173
+```
+0. Copy `.env.example` to `.env` and fill in `VITE_LIVE_SHEET_ID`, `VITE_LIVE_SHEET_GID` and `VITE_ARCHIVE_SHEET_ID` from your sheet links. The sheet IDs are kept out of the source code because this repository is public. (You can also add sheets later on **Data Import → Google Sheets**.)
+1. The first time, the portal asks you to create the **Super Admin** login for this computer.
+2. Open **Data Import** and click **Download latest CSV from the sheet**. This downloads the responses tab (gid <your-tab-gid>) using your own Google login. Then choose that file on the same page. Tick *Publish new weeks immediately* to see every week at once.
+3. To refresh, repeat step 2. Audits that are already loaded are skipped.
+
+Everything stays in this browser on this computer (IndexedDB). Nothing is uploaded, nobody else can sign in, and no emails can be sent. Teams are created from the sheet's *Lead Name* column. Leads' emails show as "needed" until you import the CAM ↔ Lead mapping. **Delete local data** in the blue bar removes everything.
+
+### Connect Google Sheets directly (no CSV uploads)
+
+Do this once so the portal reads your sheets itself, using your own Google account with read-only access.
+1. Go to **console.cloud.google.com** and pick or create a project (for example "CS QA Portal").
+2. Open **APIs & Services → Library**, search for **Google Sheets API** and click **Enable**.
+3. Open **APIs & Services → OAuth consent screen**. Choose **Internal**, enter an app name ("CS QA Portal") and your email, then save.
+4. Open **APIs & Services → Credentials → Create credentials → OAuth client ID**.
+   * Application type: **Web application**
+   * Authorised JavaScript origins: **http://localhost:5173** (add the deployed portal URL here later)
+   * Click Create and copy the **Client ID**.
+5. In the `portal` folder, create a file named `.env` (or edit the existing one) with this line:
+   ```
+   VITE_GOOGLE_CLIENT_ID=<the client id>
+   ```
+6. Restart with `npm run local`. Then go to **Data Import → Google Sheets (direct connection)**:
+   * **Sync live sheet now** reads the live form.
+   * **Sync live + archives** also loads the 2022–2025 archive tabs. It only needs to run once, and it's safe to repeat.
+   * Tick *Re-sync every 30 minutes* to keep the portal up to date while it's open.
+
+If Google shows "access blocked", your Workspace admin needs to allow the app. Using **Internal** in step 3 usually avoids this.
+
+### Archived audits (2022–2025)
+
+The archive tabs in *CS Task Audit | Archives | 2022 - 2025* are read with the rubric that applied in each year:
+
+* **2022–23**: Chat was 30/15/10/10/10/15/10 and IB Call was 10/5/5/10/10/15/15/15/10/5. These parameters are stored as a separate "Rubric 2022–23" version.
+* **2024 onward**: the current rubric. Older header spellings, such as "Empathy / Mirroring", are recognised automatically.
+* The 2022 tab was checked row by row: 7,220 audits, every score matches its parameters, plus 49 exact duplicate rows.
+
+Archived rows record the CAM by name (for example "Akanksha R"), not by email. Under **Users & Roles → Names from archived audits**, link each name to the CAM it belongs to. Likely matches are suggested; for example, "Aishwarya C" is suggested for aishwarya.chandra. Once linked, that CAM's history appears on their dashboard, and future imports of the same name go straight to them. Names you don't link stay as history only and can't sign in.
 
 ## 4. Deploy
 
@@ -147,13 +193,15 @@ Login · Forgot/Reset password · QA Master Dashboard · Team Lead Dashboard · 
 
 | Suite | Command | Result |
 |---|---|---|
-| SQL security + workflow + weekly emails (real PostgreSQL 16, Supabase auth shim) | `npm run test:db` | 105 assertions passed |
+| SQL security + workflow + weekly emails + archive import (real PostgreSQL 16, Supabase auth shim) | `npm run test:db` | 118 assertions passed |
+| Direct Google sync in local mode, Google endpoints replaced by the real live + 2022 archive exports | `node e2e/local-google.mjs` | 11,594 + 7,220 audits loaded; 52 archived names; linking moves their audits |
 | Unit tests (mapper, metrics, demo rules) | `npm test` | 29 passed |
 | Mapper vs the live sheet (re-run 29 Sep 2026: 11,678 rows, WK-2 → WK-39) | — | 11,594 valid, 73 duplicates, 11 genuine data errors |
 | SMTP delivery path (nodemailer, TLS 465, To + CC + Reply-To) against a local mail server | — | delivered |
 | Weekly Report Emails page in the demo (send, skip already-sent) | `node e2e/emails.mjs` | passed |
 | Playwright: every page as CAM, Lead and QA, plus mobile | `node e2e/smoke.mjs` | no page errors |
 | Playwright: full appeal (CAM → Lead → QA → score recalculated; isolation checks) | `node e2e/workflow.mjs` | passed |
+| Super Admin sets a temporary password → CAM signs in, must change it, sees no admin pages; password never stored or logged in readable form | `node e2e/passwords.mjs` | 16/16 passed |
 | Edge Functions type check | `deno check supabase/functions/*/index.ts` | passed |
 
 The SQL suite covers: CAM, Lead, stranger and anonymous isolation; ID-guessing attempts; blocked role escalation; draft weeks hidden; appeals that skip the Lead are rejected; a Lead can't finalise; QA can't decide before the Lead has reviewed; duplicate-appeal and appeal-window enforcement; partial approvals; overturning an autofail with re-scoring; reopening an appeal and reverting it; append-only history; evidence policies; SLA sweeps; and import validation.

@@ -50,7 +50,7 @@ export class SupabaseRepo implements Repo {
         lead_name = l?.full_name ?? null;
       }
     }
-    return { ...emp, team_name, lead_name };
+    return { ...emp, team_name, lead_name, must_change_password: data.user.user_metadata?.must_change_password === true };
   }
   async signIn(email: string, password: string): Promise<Me> {
     const { error } = await this.sb.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
@@ -69,7 +69,7 @@ export class SupabaseRepo implements Repo {
     if (error) throw new Error(error.message);
   }
   async updatePassword(password: string) {
-    const { error } = await this.sb.auth.updateUser({ password });
+    const { error } = await this.sb.auth.updateUser({ password, data: { must_change_password: false } });
     if (error) throw new Error(error.message);
   }
   onAuthEvent(cb: (e: 'SIGNED_IN' | 'SIGNED_OUT' | 'PASSWORD_RECOVERY') => void) {
@@ -240,6 +240,11 @@ export class SupabaseRepo implements Repo {
     if (error) throw new Error(error.message);
     if (data?.error) throw new Error(data.error);
   }
+  async setUserPassword(employeeId: string, password: string) {
+    const { data, error } = await this.sb.functions.invoke('admin-users', { body: { action: 'set_password', employee_id: employeeId, password } });
+    if (error) throw new Error(error.message);
+    if (data?.error) throw new Error(data.error);
+  }
   async upsertTeam(t: Partial<Team> & { name: string }) {
     unwrap(await (t.id ? this.sb.from('teams').update({ name: t.name, lead_id: t.lead_id ?? null }).eq('id', t.id).select()
       : this.sb.from('teams').insert({ name: t.name, lead_id: t.lead_id ?? null }).select()));
@@ -260,11 +265,11 @@ export class SupabaseRepo implements Repo {
     }
     return { batch_id: batch_id ?? '', ...total };
   }
-  async syncGoogleSheet() {
-    const { data, error } = await this.sb.functions.invoke('sheets-sync', { body: {} });
+  async syncGoogleSheet(scope: 'live' | 'all') {
+    const { data, error } = await this.sb.functions.invoke('sheets-sync', { body: { scope } });
     if (error) throw new Error(error.message);
     if (data?.error) throw new Error(data.error);
-    return data;
+    return (data?.results ?? []) as import('../lib/types').SheetSyncResult[];
   }
   async listImportBatches() { return unwrap(await this.sb.from('import_batches').select('*').order('created_at', { ascending: false }).limit(50)) as ImportBatch[]; }
   async listImportRejections(batchId: string) {
@@ -297,6 +302,9 @@ export class SupabaseRepo implements Repo {
   async importTeamMapping(rows: import('../lib/types').TeamMappingRow[]) {
     return this.rpc<import('../lib/types').TeamMappingResult>('import_team_mapping', { p_rows: rows });
   }
+
+  async historicalCams() { return this.rpc<import('../lib/types').HistoricalCam[]>('historical_cams', {}); }
+  async mergeEmployee(fromId: string, intoId: string) { return this.rpc<{ moved: number }>('merge_employee', { p_from: fromId, p_into: intoId }); }
 
   // ---------------------------------------------------------------- notifications
   async listNotifications() {

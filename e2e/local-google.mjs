@@ -1,0 +1,51 @@
+// Local review mode + direct Google Sheets sync, with Google's endpoints mocked by the REAL sheet exports.
+import { chromium } from 'playwright';
+import Papa from 'papaparse';
+import { createServer } from 'node:http';
+import { readFileSync, existsSync } from 'node:fs';
+import { join, extname } from 'node:path';
+const root = new URL('../dist-local/', import.meta.url).pathname;
+const srv = createServer((q, r) => { let p = join(root, decodeURIComponent(q.url.split('?')[0])); if (!existsSync(p) || p.endsWith('/')) p = join(root, 'index.html');
+  r.writeHead(200, { 'content-type': { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html' }[extname(p)] ?? 'application/octet-stream' }); r.end(readFileSync(p)); }).listen(4178);
+const csv = (f) => Papa.parse(readFileSync(f, 'utf8'), { skipEmptyLines: true }).data;
+const live = csv('/home/claude/research/live.csv'); const a2022 = csv('/home/claude/research/archive2022.csv');
+const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
+const ctx = await b.newContext({ viewport: { width: 1400, height: 1000 } });
+await ctx.route('https://accounts.google.com/gsi/client', (r) => r.fulfill({ contentType: 'text/javascript', body:
+  `window.google={accounts:{oauth2:{initTokenClient:(c)=>({requestAccessToken:()=>setTimeout(()=>c.callback({access_token:'tok',expires_in:3600}),10)})}}};` }));
+const calls = [];
+await ctx.route('https://sheets.googleapis.com/**', (r) => {
+  const u = decodeURIComponent(r.request().url()); calls.push(u.replace('https://sheets.googleapis.com/v4/spreadsheets/', '').slice(0, 90));
+  if (r.request().headers()['authorization'] !== 'Bearer tok') return r.fulfill({ status: 401, body: '{}' });
+  if (u.includes('fields=sheets.properties')) return r.fulfill({ contentType: 'application/json', body: JSON.stringify({ sheets: [{ properties: { sheetId: 123456789, title: 'Form Responses 1' } }] }) });
+  if (u.includes("'Form Responses 1'")) return r.fulfill({ contentType: 'application/json', body: JSON.stringify({ values: live }) });
+  if (u.includes("'Archived Data 2022'")) return r.fulfill({ contentType: 'application/json', body: JSON.stringify({ values: a2022 }) });
+  return r.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: { message: 'Unable to parse range (mock: tab not provided)' } }) });
+});
+const p = await ctx.newPage();
+const errs = []; p.on('pageerror', (e) => errs.push(e.message));
+const B = 'http://localhost:4178/#';
+await p.goto(B + '/login'); await p.waitForSelector('text=Set up local review');
+await p.fill('#ls-name', 'Test Admin'); await p.fill('#ls-email', 'qa.admin@example.com'); await p.fill('#ls-pw', 'LocalPass123'); await p.fill('#ls-pw2', 'LocalPass123');
+await p.click('button[type=submit]'); await p.waitForSelector('text=Google Sheets (direct connection)');
+let t = Date.now();
+await p.click('button:has-text("Sync live sheet now")'); await p.waitForSelector('text=Google Sheets synced', { timeout: 120000 });
+console.log('live sync', Date.now() - t, 'ms:', (await p.locator('ul.rounded li').allTextContents()).join(' | '));
+t = Date.now();
+await p.click('button:has-text("Sync live + archives")'); await p.waitForSelector('text=Sync finished', { timeout: 300000 });
+console.log('all sync', Date.now() - t, 'ms:'); for (const x of await p.locator('ul.rounded li').allTextContents()) console.log('  ', x.slice(0, 160));
+await p.goto(B + '/admin/users'); await p.waitForSelector('text=Names from archived audits', { timeout: 30000 });
+console.log('historical header', await p.locator('text=Names from archived audits').textContent());
+const suggested = await p.locator('text=Suggested match').count(); console.log('suggested matches', suggested);
+// link the first suggested
+const row = p.locator('tr:has(div:has-text("Suggested match"))').first();
+const name = await row.locator('td').first().textContent();
+await row.locator('button:has-text("Link")').click(); await p.click('[role=dialog] button:has-text("Link")'); await p.waitForTimeout(800);
+console.log('linked', name, '->', await p.locator('[aria-live] div').last().textContent());
+await p.goto(B + '/?mode=quarter&period=2022-Q3'); await p.waitForSelector('text=Consolidated CAM performance', { timeout: 60000 });
+console.log('2022 Q3 KPIs:', (await p.locator('div.rounded-lg:has-text("Tasks Audited")').first().textContent()), '|', (await p.locator('div.rounded-lg:has-text("Overall QA Score")').first().textContent()));
+await p.goto(B + '/parameters?mode=quarter&period=2022-Q3'); await p.waitForTimeout(1500);
+await p.click('button:has-text("Chat Request")'); await p.waitForTimeout(500);
+console.log('legacy params shown:', (await p.locator('text=Rubric 2022–23').count()) > 0);
+console.log('google calls', calls.length, 'errors', errs);
+await b.close(); srv.close();

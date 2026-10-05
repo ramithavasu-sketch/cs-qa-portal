@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Mail, Send } from 'lucide-react';
 import { useApp, useAsync, useRef_ } from '../app/context';
-import { repo, isDemo } from '../data';
+import { repo, isDemo, isLocal } from '../data';
 import { PageHeader } from '../components/Layout';
 import { Button, Card, ConfirmModal, EmptyState, ErrorBox, Field, Loading, Pill, Table, td, th, inputBase, inputCls, textareaCls, useToast } from '../components/ui';
 import { fmtDateTime, fmtRange } from '../lib/metrics';
@@ -27,7 +27,7 @@ export default function WeeklyEmailsPage() {
   const sendable = list.filter((r) => r.cam_active && r.cam_email);
   const notYet = sendable.filter((r) => !r.last_status || r.last_status === 'failed');
   const missingLead = list.filter((r) => !r.lead_email);
-  const portalMissing = !isDemo && !s.notifications.portal_url;
+  const portalMissing = isLocal || (!isDemo && !s.notifications.portal_url);
   const pv = list.find((r) => r.cam_id === previewCam) ?? list[0];
   const email = useMemo(() => (period && pv ? renderReportEmail(s, period, pv.cam_name) : null), [s, period, pv]);
   const cc = pv ? [s.report_email.cc_lead ? pv.lead_email : null, s.report_email.extra_cc.trim() || null].filter(Boolean).join(', ') : '';
@@ -47,7 +47,8 @@ export default function WeeklyEmailsPage() {
           <select id="we-week" className={inputBase + ' w-auto'} value={periodId} onChange={(e) => { setSp({ period: e.target.value }, { replace: true }); setSel(new Set()); setResult(null); }}>
             {weeks.map((p) => <option key={p.id} value={p.id}>{p.short_label} · {fmtRange(p.start_date, p.end_date)}</option>)}</select></div>} />
       {!weeks.length && <EmptyState title="No published weeks yet" body="Publish a week under Reporting & Settings first." />}
-      {portalMissing && <ErrorBox error={new Error('Set the portal URL under Reporting & Settings → Notifications first, so the email can link to each CAM’s report.')} />}
+      {isLocal && <p className="rounded bg-info-soft px-3 py-2 text-[13px] text-info">Local review mode: you can check recipients, CC and the email preview here. Sending is switched off until the portal is deployed, so no email can go out while you review.</p>}
+      {portalMissing && !isLocal && <ErrorBox error={new Error('Set the portal URL under Reporting & Settings → Notifications first, so the email can link to each CAM’s report.')} />}
       {isDemo && <p className="rounded bg-warn-soft px-3 py-2 text-[13px] text-warn">Demo mode: sending is simulated and nothing is delivered. In the deployed portal, emails go out through your configured mail account.</p>}
       {missingLead.length > 0 && <p className="rounded bg-warn-soft px-3 py-2 text-[13px] text-warn">{missingLead.length} CAM(s) have no Team Lead email, so their email will go without a CC: {missingLead.map((r) => r.cam_name).join(', ')}. <Link to="/admin/teams" className="font-semibold underline">Fix in Teams</Link></p>}
 

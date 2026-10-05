@@ -24,6 +24,11 @@ export interface RubricParameter {
   maxScore: number;
   sortOrder: number;
   sourceColumn: string;
+  /** Other header spellings used by older form versions (matched ignoring case, spaces and punctuation). */
+  aliases?: string[];
+  /** 'current' = live audit form. Older rubric versions are kept (inactive) so archived audits score correctly. */
+  rubricVersion?: string;
+  active?: boolean;
 }
 
 export const TASK_TYPES: RubricTaskType[] = [
@@ -56,7 +61,7 @@ export const PARAMETERS: RubricParameter[] = [
   { id: p(301), taskType: 'IB_CALL', name: 'Tone of Voice', section: 'Soft Skills', maxScore: 10, sortOrder: 1, sourceColumn: ' [Tone of Voice  [10]]' },
   { id: p(302), taskType: 'IB_CALL', name: 'Call Control / Accountability', section: 'Soft Skills', maxScore: 10, sortOrder: 2, sourceColumn: ' [Call Control / Accountability [10]]' },
   { id: p(303), taskType: 'IB_CALL', name: 'Acknowledgement / Active Listening', section: 'Soft Skills', maxScore: 10, sortOrder: 3, sourceColumn: ' [Acknowledgement / Active Listening [10]]' },
-  { id: p(304), taskType: 'IB_CALL', name: 'Empathy & Affirmation', section: 'Soft Skills', maxScore: 10, sortOrder: 4, sourceColumn: ' [Empathy & Affimation [10]]' },
+  { id: p(304), taskType: 'IB_CALL', name: 'Empathy & Affirmation', section: 'Soft Skills', maxScore: 10, sortOrder: 4, sourceColumn: ' [Empathy & Affimation [10]]', aliases: [' [Empathy / Mirroring [10]]', ' [Empathy / Affirmation [10]]', ' [Empathy & Affirmation [10]]'] },
   { id: p(305), taskType: 'IB_CALL', name: 'Personalization & Rapport Building', section: 'Soft Skills', maxScore: 5, sortOrder: 5, sourceColumn: ' [Personalization & Rapport Building  (IB call) [5]]' },
   { id: p(306), taskType: 'IB_CALL', name: 'Query Resolution', section: 'Technical Skills', maxScore: 20, sortOrder: 6, sourceColumn: ' [Query resolution (IB call) [20]]' },
   { id: p(307), taskType: 'IB_CALL', name: 'Average Task-Handled Time', section: 'Technical Skills', maxScore: 10, sortOrder: 7, sourceColumn: ' [Average Task-Handled Time (IB call) [10]]' },
@@ -67,7 +72,42 @@ export const PARAMETERS: RubricParameter[] = [
   { id: p(401), taskType: 'INTERNAL', name: 'Query Resolution', section: null, maxScore: 80, sortOrder: 1, sourceColumn: ' [Query resolution (Internal) [80]]' },
   { id: p(402), taskType: 'INTERNAL', name: 'Average Task-Handled Time', section: null, maxScore: 10, sortOrder: 2, sourceColumn: ' [Average Task-Handled Time (Internal) [10]]' },
   { id: p(403), taskType: 'INTERNAL', name: 'Required Documentation', section: null, maxScore: 10, sortOrder: 3, sourceColumn: ' [Required Documentation (Internal) [10]]' },
+
+  // ---- Rubric used until end of 2023 (CS Task Audit | Archives: "Archived Data 2022" / "2023").
+  // Email Request and Internal were unchanged, so those archived audits use the parameters above.
+  // Chat Request (100)
+  { id: p(501), taskType: 'CHAT', name: 'Query Resolution', section: 'Rubric 2022–23', maxScore: 30, sortOrder: 51, sourceColumn: ' [Query resolution (Chat) [30]]', rubricVersion: '2022-23', active: false },
+  { id: p(502), taskType: 'CHAT', name: 'OB Call / Follow-up', section: 'Rubric 2022–23', maxScore: 15, sortOrder: 52, sourceColumn: ' [OB call/Follow-up (Chat) [15]]', rubricVersion: '2022-23', active: false },
+  { id: p(503), taskType: 'CHAT', name: 'Required Documentation', section: 'Rubric 2022–23', maxScore: 10, sortOrder: 53, sourceColumn: ' [Required Documentation (Chat) [10]]', rubricVersion: '2022-23', active: false },
+  { id: p(504), taskType: 'CHAT', name: 'Hold & Response Time', section: 'Rubric 2022–23', maxScore: 10, sortOrder: 54, sourceColumn: ' [Hold & Response Time (Chat) [10]]', rubricVersion: '2022-23', active: false },
+  { id: p(505), taskType: 'CHAT', name: 'Personalization', section: 'Rubric 2022–23', maxScore: 10, sortOrder: 55, sourceColumn: ' [Personalization (Chat) [10]]', rubricVersion: '2022-23', active: false },
+  { id: p(506), taskType: 'CHAT', name: 'Professionalism / Communication', section: 'Rubric 2022–23', maxScore: 15, sortOrder: 56, sourceColumn: ' [Professionalism/Communication (Chat) [15]]', rubricVersion: '2022-23', active: false },
+  { id: p(507), taskType: 'CHAT', name: 'Checklist', section: 'Rubric 2022–23', maxScore: 10, sortOrder: 57, sourceColumn: ' [Checklist (Chat) [10]]', rubricVersion: '2022-23', active: false },
+  // IB Call (100)
+  { id: p(601), taskType: 'IB_CALL', name: 'Tone of Voice', section: 'Soft Skills · Rubric 2022–23', maxScore: 10, sortOrder: 61, sourceColumn: ' [Tone of Voice (IB call) [10]]', rubricVersion: '2022-23', active: false },
+  { id: p(602), taskType: 'IB_CALL', name: 'Active Listening / Acknowledgement', section: 'Soft Skills · Rubric 2022–23', maxScore: 5, sortOrder: 62, sourceColumn: ' [Active Listening / Acknowledgement (IB call) [5]]', rubricVersion: '2022-23', active: false },
+  { id: p(603), taskType: 'IB_CALL', name: 'Empathy / Mirroring', section: 'Soft Skills · Rubric 2022–23', maxScore: 5, sortOrder: 63, sourceColumn: ' [Empathy / Mirroring (IB call) [5]]', rubricVersion: '2022-23', active: false },
+  { id: p(604), taskType: 'IB_CALL', name: 'Confidence / Professionalism', section: 'Soft Skills · Rubric 2022–23', maxScore: 10, sortOrder: 64, sourceColumn: ' [Confidence/Professionalism (IB call) [10]]', rubricVersion: '2022-23', active: false },
+  { id: p(605), taskType: 'IB_CALL', name: 'Positivity / Accountability', section: 'Soft Skills · Rubric 2022–23', maxScore: 10, sortOrder: 65, sourceColumn: ' [Positivity / Accountability (IB call) [10]]', rubricVersion: '2022-23', active: false },
+  { id: p(606), taskType: 'IB_CALL', name: 'Call Control', section: 'Soft Skills · Rubric 2022–23', maxScore: 15, sortOrder: 66, sourceColumn: ' [Call Control (IB call) [15]]', rubricVersion: '2022-23', active: false },
+  { id: p(607), taskType: 'IB_CALL', name: 'Personalization & Rapport Building', section: 'Soft Skills · Rubric 2022–23', maxScore: 15, sortOrder: 67, sourceColumn: ' [Personalization & Rapport Building (IB call) [15]]', rubricVersion: '2022-23', active: false },
+  { id: p(608), taskType: 'IB_CALL', name: 'Query Resolution', section: 'Technical Skills · Rubric 2022–23', maxScore: 15, sortOrder: 68, sourceColumn: ' [Query resolution (IB call) [15]]', rubricVersion: '2022-23', active: false },
+  { id: p(609), taskType: 'IB_CALL', name: 'Required Documentation', section: 'Technical Skills · Rubric 2022–23', maxScore: 10, sortOrder: 69, sourceColumn: ' [Required Documentation (IB call) [10]]', rubricVersion: '2022-23', active: false },
+  { id: p(610), taskType: 'IB_CALL', name: 'Checklist', section: 'Technical Skills · Rubric 2022–23', maxScore: 5, sortOrder: 70, sourceColumn: ' [Checklist (IB call) [5]]', rubricVersion: '2022-23', active: false },
 ];
+
+/** Google Sheets the portal reads audits from. Live = current form; archive = previous years (imported once, re-runnable). */
+export interface DataSource { id: string; label: string; kind: 'live' | 'archive'; sheet_id: string; gid?: string; tab?: string; enabled: boolean }
+export const ARCHIVE_TABS = ['Archived Data 2022', 'Archived Data 2023', 'Archived Data 2024', 'Archived Data 2025 (Until WK 51)', 'Archived Data 2025 (From WK 52 to 53)'];
+/** Sheet IDs are not kept in the (public) source code: pass them from .env, or add sheets on the Data Import page. */
+export function buildDataSources(ids: { liveSheetId?: string; liveGid?: string; archiveSheetId?: string } = {}): DataSource[] {
+  const live: DataSource[] = ids.liveSheetId ? [{ id: 'live', label: 'New QA Live Task Audit Form (Responses)', kind: 'live', sheet_id: ids.liveSheetId, gid: ids.liveGid || undefined, enabled: true }] : [];
+  const archives: DataSource[] = ids.archiveSheetId ? ARCHIVE_TABS.map((tab, i) => ({
+    id: `archive-${i + 1}`, label: `CS Task Audit | Archives — ${tab}`, kind: 'archive' as const, sheet_id: ids.archiveSheetId!, tab, enabled: true,
+  })) : [];
+  return [...live, ...archives];
+}
+export const DEFAULT_DATA_SOURCES: DataSource[] = buildDataSources();
 
 export interface PortalSettings {
   qa_target: { score: number; fcr_rate: number; autofail_rate_max: number };
@@ -81,6 +121,7 @@ export interface PortalSettings {
     in_app: Record<string, boolean>;
     email: Record<string, boolean>;
   };
+  data_sources: { sources: DataSource[]; auto_sync_minutes: number };
   report_email: {
     subject: string;
     body_html: string;
@@ -114,6 +155,7 @@ export const DEFAULT_SETTINGS: PortalSettings = {
     in_app: {},
     email: {},
   },
+  data_sources: { sources: DEFAULT_DATA_SOURCES, auto_sync_minutes: 30 },
   report_email: {
     subject: 'CS QA Report {WEEK} | {CAM_NAME}',
     body_html: DEFAULT_REPORT_EMAIL_HTML,
@@ -132,5 +174,6 @@ export const SETTING_DESCRIPTIONS: Record<keyof PortalSettings, string> = {
   sla: 'Review service-level targets (days) used for overdue flags',
   reporting: 'Audit-week definition and automatic publishing',
   notifications: 'In-app / email notification switches (email requires the send-email function)',
+  data_sources: 'Google Sheets the portal imports audits from (live form + archives)',
   report_email: 'Weekly QA report email sent to each CAM (CC: Team Lead) when a week is published',
 };

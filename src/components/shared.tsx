@@ -48,7 +48,7 @@ export function ParameterAnalysis({ cur, prev, parameters, taskTypeNames, settin
   const [type, setType] = useState<string>(types[0] ?? 'ER');
   const [drill, setDrill] = useState<ParamStat | null>(null);
   const activeType = types.includes(type) ? type : types[0];
-  const list = stats.filter((s) => s.parameter.task_type === activeType && s.parameter.active).sort((a, b) => a.parameter.sort_order - b.parameter.sort_order);
+  const list = stats.filter((s) => s.parameter.task_type === activeType && (s.parameter.active || s.evaluated > 0)).sort((a, b) => a.parameter.sort_order - b.parameter.sort_order);
   const typeTasks = cur.filter((e) => e.task_type === activeType);
   if (!types.length) return <EmptyState title="No QA evaluations are available for this reporting period." body="Parameter results appear once tasks are audited and the week is published." />;
   const sections = [...new Set(list.map((s) => s.parameter.section ?? ''))];

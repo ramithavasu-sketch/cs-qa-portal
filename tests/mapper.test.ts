@@ -3,7 +3,7 @@ import { mapAuditRows, parseWeekLabel, parseUsDate, formatWeekLabel } from '../s
 import { TASK_TYPES, PARAMETERS } from '../supabase/functions/_shared/rubric';
 
 const tt = TASK_TYPES.map((t) => ({ code: t.code, source_label: t.sourceLabel, feedback_column: t.feedbackColumn, fcr_column: t.fcrColumn }));
-const ps = PARAMETERS.map((p) => ({ id: p.id, task_type: p.taskType, name: p.name, max_score: p.maxScore, source_column: p.sourceColumn, active: true }));
+const ps = PARAMETERS.map((p) => ({ id: p.id, task_type: p.taskType, name: p.name, max_score: p.maxScore, source_column: p.sourceColumn, active: p.active !== false, rubric_version: p.rubricVersion ?? 'current', source_aliases: p.aliases ?? [] }));
 const erRow = (over: Record<string, string> = {}) => ({
   Timestamp: '9/28/2026 12:24:19', 'Email Address': 'qa.person@x.co', Score: '85', 'QA Week': 'WK-39 : 2026 (09/24- 09/30)',
   'DS Task Link': 'https://my.distributedsource.com/crm#task/21956210-397d-4fdb-a50b-72822bbe434c', 'CAM Name': 'first.last@x.co',
@@ -65,7 +65,23 @@ describe('mapAuditRows', () => {
   it('reports missing required columns', () => {
     expect(mapAuditRows([{ Foo: '1' }], tt, ps).missingColumns.length).toBeGreaterThan(0);
   });
-  it('requires CAM email', () => {
-    expect(mapAuditRows([erRow({ 'CAM Name': 'Jane Doe' })], tt, ps).rejections[0].reason).toMatch(/email/);
+  it('accepts name-only CAMs from archived years (resolved on the server)', () => {
+    const r = mapAuditRows([erRow({ 'CAM Name': 'Akanksha R' })], tt, ps);
+    expect(r.rows[0].cam_email).toBe(''); expect(r.rows[0].cam_name).toBe('Akanksha R');
+    expect(mapAuditRows([erRow({ 'CAM Name': '' })], tt, ps).rejections[0].reason).toMatch(/empty/);
+  });
+  it('scores archived Chat audits with the 2022–23 rubric', () => {
+    const old = { Timestamp: '7/1/2022 10:00:00', 'Email Address': 'qa@x.co', Score: '85', 'QA Week': 'WK-27 : 2022 (06/26 - 07/02)',
+      'DS Task Link': 'https://ds/crm#task/11111111-1111-4111-8111-111111111111', 'CAM Name': 'Pranoy', 'Auto-Fail': 'No', 'Task Type': 'Chat Request',
+      ' [Query resolution (Chat) [30]]': '30', ' [OB call/Follow-up (Chat) [15]]': '0', ' [Required Documentation (Chat) [10]]': '10', ' [Hold & Response Time (Chat) [10]]': '10',
+      ' [Personalization (Chat) [10]]': '10', ' [Professionalism/Communication (Chat) [15]]': '15', ' [Checklist (Chat) [10]]': '10', 'Feedback (Chat)': 'ok' };
+    const r = mapAuditRows([old], tt, ps);
+    expect(r.rejections).toEqual([]);
+    expect(r.rows[0].scores.map((x) => x.parameter_id)).toEqual(PARAMETERS.filter((p) => p.taskType === 'CHAT' && p.rubricVersion === '2022-23').map((p) => p.id));
+  });
+  it('matches renamed headers loosely', () => {
+    const row = erRow(); const renamed: Record<string, string> = {};
+    for (const [k, v] of Object.entries(row)) renamed[k.replace(/^ /, '').replace('  ', ' ')] = v;
+    expect(mapAuditRows([renamed], tt, ps).rows).toHaveLength(1);
   });
 });

@@ -11,7 +11,8 @@
     "build:demo": "tsc -b && VITE_DATA_MODE=demo vite build --mode demo",
     "test": "vitest run",
     "test:db": "./scripts/test-db.sh",
-    "gen:sql": "node scripts/gen-reference-sql.ts"
+    "gen:sql": "node scripts/gen-reference-sql.ts",
+    "local": "VITE_DATA_MODE=local vite"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",

@@ -1,8 +1,10 @@
 import { Fragment, useMemo, useState } from 'react';
+import { Copy, Eye, EyeOff, KeyRound, RefreshCw } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import Papa from 'papaparse';
 import { useApp, useAsync, useRef_ } from '../app/context';
-import { repo, isDemo } from '../data';
+import { repo, isDemo, isLocal } from '../data';
+import { SheetSourcesCard } from '../components/SheetSync';
 import { PageHeader } from '../components/Layout';
 import { Button, Card, ConfirmModal, EmptyState, ErrorBox, Field, Loading, Modal, Pagination, Pill, Table, td, th, inputCls, inputBase, useToast } from '../components/ui';
 import { fmtDateTime, fmtRange } from '../lib/metrics';
@@ -18,13 +20,16 @@ export function UsersPage() {
   const toast = useToast();
   const [q, setQ] = useState(''); const [role, setRole] = useState(''); const [status, setStatus] = useState('active');
   const [edit, setEdit] = useState<Partial<Employee> | null>(null);
+  const [pwFor, setPwFor] = useState<Employee | null>(null);
   const [page, setPage] = useState(1);
-  const list = ref.employees.filter((e) => (!q || (e.full_name + e.email).toLowerCase().includes(q.toLowerCase())) && (!role || e.role === role) && (!status || e.status === status));
+  const isHist = (e: Employee) => e.email.endsWith('@cam-email-needed.invalid');
+  const list = ref.employees.filter((e) => !isHist(e) && (!q || (e.full_name + e.email).toLowerCase().includes(q.toLowerCase())) && (!role || e.role === role) && (!status || e.status === status));
   const pages = Math.max(1, Math.ceil(list.length / 25));
   const teamName = (id: string | null) => ref.teams.find((t) => t.id === id)?.name ?? '—';
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Users & Roles" subtitle="Accounts are invite-only. A person can sign in once their email has an active record here and they accept the invitation."
+      {isLocal && <p className="rounded bg-info-soft px-3 py-2 text-[13px] text-info">Local review mode runs only on this computer, so invitation emails can’t be sent from here. You can set a temporary password for anyone with <strong>Set password</strong> — they can then sign in on this computer only (useful for checking what a Lead or CAM sees). Once the portal is deployed, the same button lets people sign in from anywhere.</p>}
+      <PageHeader title="Users & Roles" subtitle="Only people with an active record here can sign in — either by accepting an invitation or with a temporary password you set. Temporary passwords must be changed at first sign-in."
         actions={<Button onClick={() => setEdit({ role: 'user', status: 'active' })}>Add user</Button>} />
       <div className="flex flex-wrap gap-3">
         <input aria-label="Search" className={inputBase + ' w-64'} placeholder="Search name or email" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
@@ -38,24 +43,117 @@ export function UsersPage() {
             <tr key={e.id}>
               <td className={td + ' font-medium'}>{e.full_name}</td><td className={td + ' text-muted'}>{e.email}</td><td className={td}>{ROLE_NAME[e.role]}</td>
               <td className={td}>{e.role === 'admin' ? ref.teams.filter((t) => t.lead_id === e.id).map((t) => t.name).join(', ') || '—' : teamName(e.team_id)}</td>
-              <td className={td}>{isDemo || e.auth_user_id ? <Pill tone="good">Linked</Pill> : <Pill>Not invited</Pill>}</td>
+              <td className={td}>{isDemo || e.auth_user_id ? <Pill tone="good">Login ready</Pill> : <Pill>No login yet</Pill>}</td>
               <td className={td}>{e.status === 'active' ? <Pill tone="good">Active</Pill> : <Pill tone="bad">Deactivated</Pill>}</td>
               <td className={td + ' whitespace-nowrap'}>
                 <Button size="sm" variant="ghost" onClick={() => setEdit(e)}>Edit</Button>
                 {e.id !== me!.id && <Button size="sm" variant="ghost" onClick={async () => {
                   try { await repo.upsertEmployee({ ...e, status: e.status === 'active' ? 'inactive' : 'active' }); await reloadRef(); toast(e.status === 'active' ? 'User deactivated.' : 'User reactivated.'); } catch (x) { toast(String((x as Error).message), 'bad'); }
                 }}>{e.status === 'active' ? 'Deactivate' : 'Reactivate'}</Button>}
-                {!e.auth_user_id && e.status === 'active' && <Button size="sm" variant="ghost" onClick={async () => { try { await repo.inviteUser(e.id); toast(isDemo ? 'Demo: invitation recorded (no email sent).' : `Invitation emailed to ${e.email}.`); } catch (x) { toast((x as Error).message, 'bad'); } }}>Send invite</Button>}
+                {e.id !== me!.id && e.status === 'active' && !e.email.endsWith('.invalid') && <Button size="sm" variant="ghost" onClick={() => setPwFor(e)}><KeyRound className="h-4 w-4" />{e.auth_user_id ? 'Reset password' : 'Set password'}</Button>}
+                {!e.auth_user_id && e.status === 'active' && !isLocal && <Button size="sm" variant="ghost" onClick={async () => { try { await repo.inviteUser(e.id); toast(isDemo ? 'Demo: invitation recorded (no email sent).' : `Invitation emailed to ${e.email}.`); } catch (x) { toast((x as Error).message, 'bad'); } }}>Send invite</Button>}
               </td>
             </tr>
           ))}</tbody>
         </Table>
         <Pagination page={page} pages={pages} onPage={setPage} />
       </Card>
+      <HistoricalNames />
       {edit && <UserModal value={edit} teams={ref.teams} onClose={() => setEdit(null)} onSaved={async () => { await reloadRef(); setEdit(null); toast('User saved.'); }} />}
+      {pwFor && <SetPasswordModal user={pwFor} onClose={() => setPwFor(null)} onSaved={reloadRef} />}
     </div>
   );
 }
+
+/** Random temporary password: 14 characters, no look-alikes (0/O, 1/l/I), always has a letter and a digit. */
+function generatePassword() {
+  const letters = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ', digits = '23456789', all = letters + digits;
+  const pick = (set: string) => { const b = new Uint32Array(1); crypto.getRandomValues(b); return set[b[0] % set.length]; };
+  for (;;) {
+    const pw = Array.from({ length: 14 }, () => pick(all)).join('');
+    if (/[A-Za-z]/.test(pw) && /\d/.test(pw)) return pw;
+  }
+}
+
+/** Super Admin only (the page and the backend both check). The password is shown here once and never stored in readable form. */
+function SetPasswordModal({ user, onClose, onSaved }: { user: Employee; onClose: () => void; onSaved: () => Promise<void> }) {
+  const toast = useToast();
+  const [pw, setPw] = useState(generatePassword);
+  const [show, setShow] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const [done, setDone] = useState(false);
+  const copy = async () => { try { await navigator.clipboard.writeText(pw); toast('Password copied.'); } catch { toast('Copy failed — select the password and copy it manually.', 'bad'); } };
+  return (
+    <Modal open title={done ? 'Password set' : `${user.auth_user_id ? 'Reset' : 'Set'} password — ${user.full_name}`} onClose={onClose}
+      footer={done ? <Button onClick={onClose}>Done</Button> : <>
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        <Button loading={busy} onClick={async () => {
+          setErr(null); setBusy(true);
+          try { await repo.setUserPassword(user.id, pw); await onSaved(); setDone(true); setShow(true); } catch (x) { setErr(x); } finally { setBusy(false); }
+        }}>Save password</Button>
+      </>}>
+      <div className="flex flex-col gap-3 text-[13.5px]">
+        {!done ? <p className="text-muted">Sign-in email: <strong className="text-ink">{user.email}</strong>. A strong password has been generated — you can keep it or type your own (at least 10 characters with a letter and a number).{user.auth_user_id ? ' Their current password stops working immediately.' : ''}</p>
+          : <p className="rounded bg-good-soft px-3 py-2 text-good">Saved. Share these details with {user.full_name} privately (not in a group chat or email thread). <strong>This is the only time the password is shown</strong> — if it’s lost, just reset it again.</p>}
+        <Field label="Temporary password" htmlFor="tmp-pw">
+          <div className="flex gap-2">
+            <input id="tmp-pw" readOnly={done} type={show ? 'text' : 'password'} autoComplete="off" spellCheck={false} className={inputCls + ' font-mono tracking-wide'} value={pw} onChange={(e) => setPw(e.target.value)} />
+            <Button variant="secondary" size="sm" aria-label={show ? 'Hide password' : 'Show password'} onClick={() => setShow((s) => !s)}>{show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</Button>
+            <Button variant="secondary" size="sm" onClick={copy}><Copy className="h-4 w-4" />Copy</Button>
+            {!done && <Button variant="ghost" size="sm" aria-label="Generate another" onClick={() => setPw(generatePassword())}><RefreshCw className="h-4 w-4" /></Button>}
+          </div>
+        </Field>
+        <p className="text-[12.5px] text-muted">They’ll be asked to choose their own password the first time they sign in. The portal keeps only a scrambled (hashed) copy, so no one — including QA — can look the password up later.{isLocal ? ' In local review mode they can sign in on this computer only.' : ''}</p>
+        <ErrorBox error={err} />
+      </div>
+    </Modal>
+  );
+}
+/** Archived audits only carry a name ("Akanksha R"). Link each name to the real CAM so their history shows on their dashboard. */
+function HistoricalNames() {
+  const { reloadRef, bump } = useApp();
+  const ref = useRef_();
+  const toast = useToast();
+  const h = useAsync(() => repo.historicalCams(), [ref.employees.length]);
+  const [pick, setPick] = useState<Record<string, string>>({});
+  const [confirm, setConfirm] = useState<{ id: string; name: string; into: string } | null>(null);
+  const cams = ref.employees.filter((e) => e.role === 'user' && !e.email.endsWith('@cam-email-needed.invalid')).sort((a, b) => a.full_name.localeCompare(b.full_name));
+  const rows = h.data ?? [];
+  if (!h.loading && !rows.length) return null;
+  return (
+    <Card title={`Names from archived audits (${rows.length})`} subtitle="These names come from the 2022–2025 archives, which record the CAM’s name rather than their email. Link a name to the CAM it belongs to, and their older audits will show on that CAM’s dashboard. Names you don’t link stay as history only, and they can’t sign in." pad={false}>
+      {h.loading ? <Loading /> : (
+        <Table>
+          <thead><tr><th className={th}>Name in archive</th><th className={th + ' text-right'}>Audits</th><th className={th}>Weeks</th><th className={th}>Link to CAM</th><th className={th}></th></tr></thead>
+          <tbody>{rows.map((r) => {
+            const sel = pick[r.id] ?? (r.candidates.length === 1 ? r.candidates[0].id : '');
+            return (
+              <tr key={r.id}>
+                <td className={td + ' font-medium'}>{r.name}</td>
+                <td className={td + ' text-right tnum'}>{r.tasks}</td>
+                <td className={td + ' whitespace-nowrap text-muted'}>{r.first_week ?? '—'} → {r.last_week ?? '—'}</td>
+                <td className={td}>
+                  <select aria-label={`Link ${r.name}`} className={inputBase + ' w-auto max-w-[260px]'} value={sel} onChange={(e) => setPick({ ...pick, [r.id]: e.target.value })}>
+                    <option value="">Keep as history only</option>
+                    {r.candidates.length > 0 && <optgroup label="Suggested">{r.candidates.map((c) => <option key={c.id} value={c.id}>{c.name} · {c.email}</option>)}</optgroup>}
+                    <optgroup label="All CAMs">{cams.map((c) => <option key={c.id} value={c.id}>{c.full_name} · {c.email}</option>)}</optgroup>
+                  </select>
+                  {r.candidates.length === 1 && !pick[r.id] && <div className="text-[11.5px] text-muted">Suggested match</div>}
+                </td>
+                <td className={td}><Button size="sm" variant="secondary" disabled={!sel} onClick={() => setConfirm({ id: r.id, name: r.name, into: sel })}>Link</Button></td>
+              </tr>
+            );
+          })}</tbody>
+        </Table>
+      )}
+      <ConfirmModal open={!!confirm} title="Link archived name" confirmLabel="Link" onClose={() => setConfirm(null)}
+        onConfirm={async () => { const r = await repo.mergeEmployee(confirm!.id, confirm!.into); await reloadRef(); bump(); toast(`${r.moved} archived audit(s) moved to ${cams.find((c) => c.id === confirm!.into)?.full_name}.`); }}
+        body={<p>Move every archived audit recorded as <strong>“{confirm?.name}”</strong> to <strong>{cams.find((c) => c.id === confirm?.into)?.full_name}</strong>? Future imports of this name will go to the same CAM. This is logged in the audit log.</p>} />
+    </Card>
+  );
+}
+
 function UserModal({ value, teams, onClose, onSaved }: { value: Partial<Employee>; teams: Team[]; onClose: () => void; onSaved: () => void }) {
   const [v, setV] = useState(value); const [busy, setBusy] = useState(false); const [err, setErr] = useState<unknown>(null);
   return (
@@ -363,6 +461,8 @@ export function ImportPage() {
   const [batch, setBatch] = useState<string | null>(null);
   const batches = useAsync(() => repo.listImportBatches(), [summary]);
   const rejections = useAsync(() => (batch ? repo.listImportRejections(batch) : Promise.resolve([])), [batch]);
+  const liveSrc = ref.settings.data_sources.sources.find((s) => s.kind === 'live' && s.gid);
+  const sheetExportUrl = liveSrc ? `https://docs.google.com/spreadsheets/d/${liveSrc.sheet_id}/export?format=csv&gid=${liveSrc.gid}` : null;
 
   const parse = async (f: File) => {
     setParsing(true); setErr(null); setResult(null); setSummary(null);
@@ -404,8 +504,12 @@ export function ImportPage() {
   }, [result]);
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Data Import & Validation" subtitle="Upload a CSV or Excel export of the “New QA Live Task Audit Form (Responses)” sheet. Rows are validated against the scoring rubric before anything is saved."
-        actions={<Button variant="secondary" onClick={async () => { try { const s = await repo.syncGoogleSheet(); setSummary(s); setBatch(s.batch_id); await reloadRef(); bump(); } catch (x) { setErr(x); } }}>Sync from Google Sheet</Button>} />
+      <PageHeader title="Data Import & Validation" subtitle="Bring audits in straight from Google Sheets (live form and 2022–2025 archives), or upload a CSV/Excel export. Every row is checked against the scoring rubric of its year before it is saved." />
+      <SheetSourcesCard />
+      <details className="rounded-lg border border-line bg-surface px-4 py-3 text-[13px]">
+        <summary className="cursor-pointer font-medium">No Google connection? Upload a CSV export instead</summary>
+        <p className="mt-2 text-muted">Download the tab as CSV (it uses your Google login) and choose the file below{sheetExportUrl ? <>: <a className="text-brand hover:underline" target="_blank" rel="noreferrer noopener" href={sheetExportUrl}>download the live responses tab as CSV</a></> : <> (open the live responses sheet and use File → Download → CSV)</>}. For an archive year, open the archive sheet, pick the tab and use File → Download → CSV.</p>
+      </details>
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <Card title="1. Choose file">
           <div className="flex flex-col gap-3 text-[13px]">

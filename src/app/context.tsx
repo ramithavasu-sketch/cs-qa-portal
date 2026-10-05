@@ -19,6 +19,7 @@ interface AppCtx {
   dataVersion: number;
   bump: () => void;
   signedOutReason: string | null;
+  refreshMe: () => Promise<void>;
 }
 const Ctx = createContext<AppCtx>(null as unknown as AppCtx);
 export const useApp = () => useContext(Ctx);
@@ -75,6 +76,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setMe(u);
     await loadRef();
   }, [loadRef]);
+  const refreshMe = useCallback(async () => { setMe(await repo.currentUser()); }, []);
   const signOut = useCallback(async (reason?: string) => {
     await repo.signOut();
     setMe(null); setRef(null);
@@ -94,8 +96,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => { evs.forEach((e) => window.removeEventListener(e, touch)); clearInterval(t); };
   }, [me, signOut]);
 
-  const value = useMemo(() => ({ me, ref, loading, recovery, setRecovery, signIn, signOut, reloadRef: loadRef, dataVersion, bump, signedOutReason }),
-    [me, ref, loading, recovery, signIn, signOut, loadRef, dataVersion, bump, signedOutReason]);
+  const value = useMemo(() => ({ me, ref, loading, recovery, setRecovery, signIn, signOut, reloadRef: loadRef, dataVersion, bump, signedOutReason, refreshMe }),
+    [me, ref, loading, recovery, signIn, signOut, loadRef, dataVersion, bump, signedOutReason, refreshMe]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

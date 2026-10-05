@@ -22,6 +22,8 @@ export interface Employee {
 export interface Me extends Employee {
   team_name: string | null;
   lead_name: string | null;
+  /** Signed in with a password the QA team set: must choose their own before continuing. */
+  must_change_password?: boolean;
 }
 
 export interface Team { id: string; name: string; lead_id: string | null }
@@ -34,6 +36,7 @@ export interface TaskType {
 export interface Parameter {
   id: string; task_type: string; name: string; section: string | null; max_score: number;
   sort_order: number; source_column: string | null; active: boolean;
+  rubric_version?: string; source_aliases?: string[];
 }
 
 export interface Period {
@@ -140,3 +143,5 @@ export interface WeeklyEmailRow {
 export interface WeeklyEmailResult { queued: number; skipped: number; no_email: number; sent: number; failed: number; failures: { to: string; error: string }[] }
 export interface TeamMappingRow { cam_email: string; cam_name?: string; lead_email: string; lead_name?: string; team?: string }
 export interface TeamMappingResult { rows: number; new_leads: number; new_teams: number; new_cams: number; reassigned: number; rejected: number; errors: { row: number; reason: string }[] }
+export interface HistoricalCam { id: string; name: string; tasks: number; first_week: string | null; last_week: string | null; candidates: { id: string; name: string; email: string }[] }
+export interface SheetSyncResult { source: string; title?: string; inserted?: number; duplicates?: number; rejected?: number; error?: string }

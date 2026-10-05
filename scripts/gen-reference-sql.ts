@@ -14,7 +14,8 @@ for (const t of TASK_TYPES) {
 }
 lines.push('');
 for (const p of PARAMETERS) {
-  lines.push(`insert into public.evaluation_parameters (id, task_type, name, section, max_score, sort_order, source_column) values (${q(p.id)}, ${q(p.taskType)}, ${q(p.name)}, ${q(p.section)}, ${p.maxScore}, ${p.sortOrder}, ${q(p.sourceColumn)}) on conflict (id) do nothing;`);
+  const aliases = `array[${(p.aliases ?? []).map(q).join(', ')}]::text[]`;
+  lines.push(`insert into public.evaluation_parameters (id, task_type, name, section, max_score, sort_order, source_column, source_aliases, rubric_version, active) values (${q(p.id)}, ${q(p.taskType)}, ${q(p.name)}, ${q(p.section)}, ${p.maxScore}, ${p.sortOrder}, ${q(p.sourceColumn)}, ${aliases}, ${q(p.rubricVersion ?? 'current')}, ${p.active === false ? 'false' : 'true'}) on conflict (id) do nothing;`);
 }
 lines.push('');
 for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) {
