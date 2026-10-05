@@ -1,0 +1,16 @@
+# Minimal Supabase CLI config. Sign-ups must stay disabled: accounts are invite-only.
+project_id = "cs-qa-portal"
+
+[auth]
+enable_signup = false
+jwt_expiry = 3600
+[auth.email]
+enable_signup = false
+double_confirm_changes = true
+
+[functions.admin-users]
+verify_jwt = true
+[functions.sheets-sync]
+verify_jwt = false   # accepts either a Super Admin JWT (checked in code) or the cron secret
+[functions.send-email]
+verify_jwt = false

@@ -1,0 +1,6 @@
+node_modules
+dist
+dist-demo
+e2e/shots
+.env
+*.tsbuildinfo

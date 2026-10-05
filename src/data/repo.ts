@@ -1,0 +1,83 @@
+import type {
+  Appeal, AppealDetail, AppealFilter, AuditLog, Employee, Evaluation, EvaluationFilter, ExtraAdjustmentInput,
+  ImportBatch, ImportRejection, LeadRecommendation, Me, NotificationRow, Parameter, Period, PortalSettings,
+  QaDecisionInput, Role, ScoreAdjustment, SubmitAppealItem, TaskType, Team, WeeklyEmailRow, WeeklyEmailResult, TeamMappingRow, TeamMappingResult,
+} from '../lib/types';
+import type { ImportRow } from '../../supabase/functions/_shared/mapper';
+
+/**
+ * Every screen talks to the backend through this interface.
+ *  - SupabaseRepo: production. Reads are filtered by Postgres RLS; every state
+ *    change is a SECURITY DEFINER RPC that re-checks role and status.
+ *  - DemoRepo: in-browser store with fictional data that mirrors the same rules,
+ *    used for the public demo only.
+ */
+export interface Repo {
+  readonly mode: 'supabase' | 'demo';
+
+  // ---- auth
+  currentUser(): Promise<Me | null>;
+  signIn(email: string, password: string): Promise<Me>;
+  signOut(): Promise<void>;
+  requestPasswordReset(email: string): Promise<void>;
+  updatePassword(password: string): Promise<void>;
+  onAuthEvent(cb: (event: 'SIGNED_IN' | 'SIGNED_OUT' | 'PASSWORD_RECOVERY') => void): () => void;
+
+  // ---- reference data
+  getSettings(): Promise<PortalSettings>;
+  getTaskTypes(): Promise<TaskType[]>;
+  getParameters(): Promise<Parameter[]>;
+  getPeriods(): Promise<Period[]>;
+  getTeams(): Promise<Team[]>;
+  getEmployees(): Promise<Employee[]>;
+
+  // ---- evaluations
+  getEvaluations(filter: EvaluationFilter): Promise<Evaluation[]>;
+  getEvaluation(id: string): Promise<Evaluation | null>;
+  getAdjustments(evaluationId: string): Promise<ScoreAdjustment[]>;
+  getAppealDeadline(evaluationId: string): Promise<string | null>;
+
+  // ---- appeals
+  listAppeals(filter?: AppealFilter): Promise<Appeal[]>;
+  getAppeal(id: string): Promise<AppealDetail | null>;
+  submitAppeal(evaluationId: string, reason: string, items: SubmitAppealItem[], asDraft?: boolean): Promise<string>;
+  submitDraftAppeal(appealId: string): Promise<void>;
+  leadReviewAppeal(appealId: string, rec: LeadRecommendation, comment: string, internalNote?: string): Promise<void>;
+  respondToAppealRequest(appealId: string, response: string): Promise<void>;
+  addAppealComment(appealId: string, comment: string, internal: boolean): Promise<void>;
+  qaRequestInfo(appealId: string, from: 'cam' | 'lead', comment: string): Promise<void>;
+  qaDecideAppeal(appealId: string, decisions: QaDecisionInput[], resolution: string, extra?: ExtraAdjustmentInput[]): Promise<string>;
+  qaReopenAppeal(appealId: string, reason: string): Promise<void>;
+  closeAppeal(appealId: string, reason: string): Promise<void>;
+  grantResubmission(evaluationId: string, parameterId: string | null, isAutofail: boolean, reason: string): Promise<void>;
+  uploadEvidence(appealId: string, file: File): Promise<void>;
+  evidenceUrl(storagePath: string): Promise<string>;
+
+  // ---- QA administration
+  adminAdjustScore(evaluationId: string, parameterId: string | null, revised: number, reason: string): Promise<void>;
+  setPeriodStatus(periodId: string, status: 'draft' | 'published'): Promise<void>;
+  upsertPeriod(p: Partial<Period> & { label: string; start_date: string; end_date: string }): Promise<void>;
+  updateSetting<K extends keyof PortalSettings>(key: K, value: PortalSettings[K]): Promise<void>;
+  updateParameter(id: string, patch: Partial<Pick<Parameter, 'name' | 'max_score' | 'active' | 'sort_order' | 'section'>>): Promise<void>;
+  createParameter(p: Omit<Parameter, 'id'>): Promise<void>;
+  upsertEmployee(e: Partial<Employee> & { email: string; full_name: string; role: Role }): Promise<void>;
+  inviteUser(employeeId: string): Promise<void>;
+  upsertTeam(t: Partial<Team> & { name: string }): Promise<void>;
+  deleteTeam(id: string): Promise<void>;
+  importEvaluations(rows: ImportRow[], meta: { source: 'csv' | 'xlsx' | 'google_sheets'; file_name: string; publish_new_periods: boolean },
+    onProgress?: (done: number, total: number) => void): Promise<{ batch_id: string; total: number; inserted: number; duplicates: number; rejected: number }>;
+  syncGoogleSheet(): Promise<{ batch_id: string; total: number; inserted: number; duplicates: number; rejected: number }>;
+  listImportBatches(): Promise<ImportBatch[]>;
+  listImportRejections(batchId: string): Promise<ImportRejection[]>;
+  listAuditLogs(opts: { limit: number; offset: number; table?: string; action?: string }): Promise<AuditLog[]>;
+
+  // ---- weekly report emails & team mapping
+  weeklyEmailPreview(periodId: string): Promise<WeeklyEmailRow[]>;
+  sendWeeklyEmails(periodId: string, camIds: string[] | null, resend: boolean): Promise<WeeklyEmailResult>;
+  importTeamMapping(rows: TeamMappingRow[]): Promise<TeamMappingResult>;
+
+  // ---- notifications
+  listNotifications(): Promise<NotificationRow[]>;
+  markNotificationsRead(ids?: string[]): Promise<void>;
+}
+

@@ -1,0 +1,48 @@
+/* Layout: fixed left rail + top bar, content in a 1280px column. Tokens are RGB triplets for Tailwind alpha support. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 244 246 246;        /* page ground, faint teal bias */
+  --surface: 255 255 255;
+  --sunken: 237 241 241;
+  --line: 218 225 225;
+  --ink: 22 33 36;
+  --muted: 84 99 103;
+  --faint: 132 146 149;
+  --brand: 14 116 120;      /* deep teal */
+  --brand-ink: 255 255 255;
+  --brand-soft: 222 240 240;
+  --good: 22 122 72;  --good-soft: 222 243 231;
+  --warn: 166 104 0;  --warn-soft: 253 240 212;
+  --bad: 186 40 40;   --bad-soft: 252 228 226;
+  --info: 45 88 170;  --info-soft: 226 234 250;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: 15 21 23; --surface: 23 31 34; --sunken: 30 40 43; --line: 45 58 61; --ink: 229 236 237; --muted: 160 175 178; --faint: 116 131 134;
+    --brand: 64 181 184; --brand-ink: 8 30 32; --brand-soft: 20 55 57;
+    --good: 88 196 138; --good-soft: 21 54 38; --warn: 232 170 70; --warn-soft: 60 44 16; --bad: 240 110 105; --bad-soft: 66 26 26;
+    --info: 130 165 235; --info-soft: 28 40 68;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: 15 21 23; --surface: 23 31 34; --sunken: 30 40 43; --line: 45 58 61; --ink: 229 236 237; --muted: 160 175 178; --faint: 116 131 134;
+  --brand: 64 181 184; --brand-ink: 8 30 32; --brand-soft: 20 55 57;
+  --good: 88 196 138; --good-soft: 21 54 38; --warn: 232 170 70; --warn-soft: 60 44 16; --bad: 240 110 105; --bad-soft: 66 26 26;
+  --info: 130 165 235; --info-soft: 28 40 68;
+  color-scheme: dark;
+}
+
+html, body, #root { height: 100%; }
+body { background: rgb(var(--bg)); color: rgb(var(--ink)); font-family: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 14px; -webkit-font-smoothing: antialiased; }
+h1, h2, h3 { text-wrap: balance; }
+.tnum { font-variant-numeric: tabular-nums; }
+.eyebrow { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: rgb(var(--muted)); font-weight: 600; }
+:focus-visible { outline: 2px solid rgb(var(--brand)); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+.recharts-text { fill: rgb(var(--muted)); font-size: 11px; }
+.recharts-cartesian-grid line { stroke: rgb(var(--line)); }

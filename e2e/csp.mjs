@@ -1,0 +1,16 @@
+import { chromium } from 'playwright';
+import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
+const body = readFileSync(process.argv[2], 'utf8');
+const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"></head><body>${body}</body></html>`;
+const csp = "default-src 'none'; script-src 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data: blob:; connect-src 'none'";
+const srv = createServer((q, r) => { r.writeHead(200, { 'content-type': 'text/html', 'content-security-policy': csp }); r.end(html); }).listen(4175);
+const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
+const p = await b.newPage({ viewport: { width: 1200, height: 900 } });
+p.on('console', (m) => console.log('console', m.type(), m.text().slice(0, 300)));
+p.on('pageerror', (e) => console.log('PAGEERROR', e.message.slice(0, 300)));
+await p.goto('http://localhost:4175/');
+await p.waitForTimeout(2000); await p.click('button:has-text("Ava Thompson")'); await p.waitForTimeout(2500);
+console.log('text:', (await p.locator('body').innerText()).slice(0, 200));
+await p.screenshot({ path: 'e2e/shots/csp.png' });
+await b.close(); srv.close();
