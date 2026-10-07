@@ -37,6 +37,8 @@ export interface Parameter {
   id: string; task_type: string; name: string; section: string | null; max_score: number;
   sort_order: number; source_column: string | null; active: boolean;
   rubric_version?: string; source_aliases?: string[];
+  /** Scoring guidance shown during appeals. */
+  criteria?: string | null;
 }
 
 export interface Period {
@@ -81,6 +83,8 @@ export interface Appeal {
   period_short_label: string; audited_at: string; evaluator_name: string | null; original_score: number;
   cam_name: string; cam_email: string; lead_name: string | null; days_in_status: number; overdue: boolean;
   item_count?: number; parameters_label?: string;
+  /** Disputed parameter ids ('AF' for the autofail flag). */
+  disputed_keys?: string[];
 }
 
 export interface AppealItem {

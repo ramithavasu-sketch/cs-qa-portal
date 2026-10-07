@@ -1,6 +1,16 @@
 // Deterministic FICTIONAL demo dataset. No real employee or performance data.
 // Weeks are anchored to the date the demo is opened so the appeal windows stay live.
 import { PARAMETERS, TASK_TYPES, DEFAULT_SETTINGS, buildDataSources, type TaskTypeCode } from '../../supabase/functions/_shared/rubric';
+
+/**
+ * Sheet IDs are never written into the (public) source: they come from the private .env at build time
+ * (Vite for the browser, esbuild defines for the Google server). Elsewhere (tests, scripts) there are none.
+ */
+function envSheetSources() {
+  try {
+    return buildDataSources({ liveSheetId: import.meta.env.VITE_LIVE_SHEET_ID, liveGid: import.meta.env.VITE_LIVE_SHEET_GID, archiveSheetId: import.meta.env.VITE_ARCHIVE_SHEET_ID });
+  } catch { return buildDataSources(); }
+}
 import { formatWeekLabel } from '../../supabase/functions/_shared/mapper';
 import type { Employee, Parameter, Period, PortalSettings, TaskType, Team } from '../lib/types';
 
@@ -120,11 +130,19 @@ function isoWeekNumber(d: Date) {
   return { week: Math.ceil(((t.getTime() - y0.getTime()) / 86400000 + 1) / 7), year: t.getUTCFullYear() };
 }
 
+/** Rubric, task types and default settings only (no people, no audits). Cheap: used on every server request. */
+export function referenceData(): { taskTypes: TaskType[]; parameters: Parameter[]; settings: PortalSettings } {
+  const settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS)) as PortalSettings;
+  settings.data_sources.sources = envSheetSources();
+  const taskTypes: TaskType[] = TASK_TYPES.map((t) => ({ code: t.code, name: t.name, source_label: t.sourceLabel, feedback_column: t.feedbackColumn, fcr_column: t.fcrColumn, sort_order: t.sortOrder, active: true }));
+  const parameters: Parameter[] = PARAMETERS.map((p) => ({ id: p.id, task_type: p.taskType, name: p.name, section: p.section, max_score: p.maxScore, sort_order: p.sortOrder, source_column: p.sourceColumn, active: p.active !== false, rubric_version: p.rubricVersion ?? 'current', source_aliases: p.aliases ?? [] }));
+  return { taskTypes, parameters, settings };
+}
+
 export function generateDemoSeed(today = new Date(), weeks = 12): DemoSeed {
   const r = rng(20260929);
-  const settings = structuredClone(DEFAULT_SETTINGS);
-  const env = (import.meta as { env?: Record<string, string | undefined> }).env;
-  settings.data_sources.sources = buildDataSources({ liveSheetId: env?.VITE_LIVE_SHEET_ID, liveGid: env?.VITE_LIVE_SHEET_GID, archiveSheetId: env?.VITE_ARCHIVE_SHEET_ID });
+  const settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS)) as PortalSettings;
+  settings.data_sources.sources = envSheetSources();
   const employees: Employee[] = [];
   const teams: Team[] = [];
   const passwords: Record<string, string> = {};

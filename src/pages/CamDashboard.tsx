@@ -6,25 +6,24 @@ import { useScopeData } from '../app/useScope';
 import { PageHeader } from '../components/Layout';
 import { PeriodPicker, usePeriodSelection } from '../components/PeriodPicker';
 import { Card, EmptyState, ErrorBox, Kpi, Loading, ScoreBadge, StatusBadge, Table, td, th, Variance } from '../components/ui';
-import { TrendChart } from '../components/charts';
+import { TrendSwitch } from '../components/charts';
 import { DownloadMenu, EvaluationsTable, InsightsPanel, ParameterAnalysis } from '../components/shared';
-import { band, BAND_LABEL, buildInsights, fmtDate, fmtPct, isOpenAppeal, summarize, variance, weeklyTrend } from '../lib/metrics';
+import { appealWindowOpen, band, BAND_LABEL, finalRating, RATING_LABEL, buildInsights, fmtDate, fmtPct, isPendingAppeal, isResolvedAppeal, summarize, variance } from '../lib/metrics';
 import { buildReport } from '../lib/report';
 
-export default function CamDashboard() {
+export default function CamDashboard({ camId: propCam, embedded }: { camId?: string; embedded?: boolean } = {}) {
   const { camId: routeCam } = useParams();
   const { me } = useApp();
   const ref = useRef_();
-  const camId = routeCam ?? me!.id;
+  const camId = propCam ?? routeCam ?? me!.id;
   const cam = ref.employees.find((e) => e.id === camId) ?? (camId === me!.id ? me! : null);
   const [sel, setSel, periods] = usePeriodSelection();
-  const data = useScopeData(sel, [camId]);
+  const data = useScopeData(sel, [camId], 26);
   const s = ref.settings;
 
   const cur = summarize(data.cur);
   const prev = summarize(data.prev);
   const v = variance(cur.avg, prev.avg);
-  const trend = useMemo(() => weeklyTrend(data.history, data.historyWeeks), [data.history, data.historyWeeks]);
   const insights = useMemo(() => buildInsights(data.cur, data.prev, data.history, data.historyWeeks, ref.parameters, ref.taskTypeNames, s),
     [data.cur, data.prev, data.history, data.historyWeeks, ref.parameters, ref.taskTypeNames, s]);
   const curIds = new Set(data.cur.map((e) => e.id));
@@ -38,30 +37,35 @@ export default function CamDashboard() {
 
   return (
     <div className="flex flex-col gap-5">
-      {!isSelf && <Link to="/" className="inline-flex items-center gap-1 text-[13px] text-brand hover:underline"><ArrowLeft className="h-4 w-4" />Back to dashboard</Link>}
+      {!isSelf && !embedded && <Link to="/" className="inline-flex items-center gap-1 text-[13px] text-brand hover:underline"><ArrowLeft className="h-4 w-4" />Back to dashboard</Link>}
       <PageHeader
         title={isSelf ? 'My QA Performance' : cam.full_name}
         subtitle={<>{isSelf ? `${me!.team_name ?? 'No team'}${me!.lead_name ? ` · Team Lead: ${me!.lead_name}` : ''}` : cam.email} · Showing <strong>{sel.label}</strong></>}
         actions={<>
           <PeriodPicker sel={sel} onChange={setSel} periods={periods} />
-          <DownloadMenu build={() => buildReport({ kind: 'cam', subject: cam.full_name, sel, cur: data.cur, prev: data.prev, history: data.history, historyWeeks: data.historyWeeks,
+          <DownloadMenu empty={!data.loading && data.cur.length === 0} build={() => buildReport({ kind: 'cam', subject: cam.full_name, sel, cur: data.cur, prev: data.prev, history: data.history, historyWeeks: data.historyWeeks,
             appeals: data.appeals, parameters: ref.parameters, settings: s, taskTypeNames: ref.taskTypeNames, generatedBy: me!.full_name })} />
         </>}
       />
       <ErrorBox error={data.error} />
       {data.loading ? <Loading /> : (
         <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          {!data.loading && data.cur.length === 0 && <EmptyState title="No QA evaluations are available for this reporting period." body="Choose another week or period above. Weeks without audits are never counted as a zero score." />}
+
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
             <Kpi label={`Current ${periodWord} QA Score`} term="Average QA Score" value={fmtPct(cur.avg)}
               tone={b === 'green' ? 'good' : b === 'amber' ? 'warn' : b === 'red' ? 'bad' : 'neutral'}
               sub={cur.avg === null ? 'No evaluations in this period' : `${BAND_LABEL[b]} · target ${s.qa_target.score}%`} />
-            <Kpi label={`Previous ${periodWord} Score`} value={fmtPct(prev.avg)} sub={sel.previousLabel} />
+            <Kpi label="Final Rating" term="Final Rating" value={<span className="text-[20px]">{RATING_LABEL[finalRating(cur, s)]}</span>}
+              tone={finalRating(cur, s) === 'meets' ? 'good' : finalRating(cur, s) === 'improve' ? 'warn' : finalRating(cur, s) === 'below' ? 'bad' : 'neutral'}
+              sub={cur.avg === null ? '—' : `raw score ${fmtPct(cur.avg)} · autofail rate ${cur.autofailRate?.toFixed(2)}%`} />
+            <Kpi label={`Previous ${periodWord} Score`} term="Average QA Score" value={fmtPct(prev.avg)} sub={sel.previousLabel} />
             <Kpi label="Score Variance" term="Score Variance" value={<Variance value={v} />} sub="percentage points vs previous" />
-            <Kpi label="Tasks Audited" value={cur.tasks} sub={`${prev.tasks} in previous period`} />
+            <Kpi label="Tasks Audited" term="Tasks Audited" value={cur.tasks} sub={`${prev.tasks} in previous period`} />
             <Kpi label="Autofails" term="Autofails" value={cur.autofails} tone={cur.autofails ? 'bad' : 'neutral'} sub={cur.tasks ? `${cur.autofailRate?.toFixed(2)}% of tasks · limit < ${s.qa_target.autofail_rate_max}%` : '—'} />
             <Kpi label="Appeals Submitted" value={periodAppeals.filter((a) => a.status !== 'draft').length} sub="on tasks in this period" />
-            <Kpi label="Appeals Pending" value={data.appeals.filter(isOpenAppeal).length} sub="all periods" tone={data.appeals.some((a) => a.status === 'returned_to_cam' || (a.status === 'pending_additional_info' && a.info_requested_from === 'cam')) ? 'warn' : 'neutral'} />
-            <Kpi label="Appeals Resolved" value={data.appeals.filter((a) => ['approved', 'partially_approved', 'rejected'].includes(a.status)).length} sub="all periods" />
+            <Kpi label="Appeals Pending" term="Appeals" value={data.appeals.filter(isPendingAppeal).length} sub={`all periods${data.appeals.some((a) => a.status === 'draft') ? ` · ${data.appeals.filter((a) => a.status === 'draft').length} draft(s) not submitted` : ''}`} tone={data.appeals.some((a) => a.status === 'returned_to_cam' || (a.status === 'pending_additional_info' && a.info_requested_from === 'cam')) ? 'warn' : 'neutral'} />
+            <Kpi label="Appeals Resolved" term="Appeals" value={data.appeals.filter(isResolvedAppeal).length} sub="all periods" />
           </div>
           {data.appeals.some((a) => a.status === 'returned_to_cam' || (a.status === 'pending_additional_info' && a.info_requested_from === 'cam')) && isSelf && (
             <div className="rounded-lg border border-warn/40 bg-warn-soft px-4 py-3 text-[13.5px] text-warn">
@@ -70,8 +74,8 @@ export default function CamDashboard() {
           )}
 
           <div className="grid gap-5 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-            <Card title="Weekly performance trend" subtitle={`Weekly average vs ${s.qa_target.score}% target. Selected period is highlighted. Weeks without audits show “No Data”.`}>
-              <TrendChart points={trend} settings={s} selectedIds={sel.current.map((p) => p.id)} />
+            <Card title="Performance trend" subtitle={`Average vs ${s.qa_target.score}% target. Selected period is highlighted. Periods without audits show “No Data”.`}>
+              <TrendSwitch history={data.history} weeks={data.historyWeeks} selected={sel.current} settings={s} />
             </Card>
             <Card title="Summary by task type" subtitle={sel.label}>
               {data.cur.length === 0 ? <p className="text-[13px] text-muted">No QA evaluations are available for this reporting period.</p> : (
@@ -101,7 +105,7 @@ export default function CamDashboard() {
           </Card>
 
           <Card title="Task-level audit results" subtitle="Open a task to see every parameter, the QA feedback and to raise an appeal." pad={false}>
-            <EvaluationsTable evals={data.cur} settings={s} appealedIds={appealedIds} />
+            <EvaluationsTable evals={data.cur} settings={s} appealedIds={appealedIds} canAppeal={isSelf ? (e) => appealWindowOpen(e, s) : undefined} />
           </Card>
 
           {periodAppeals.length > 0 && (

@@ -3,7 +3,8 @@
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
 
 export const cors = {
-  'Access-Control-Allow-Origin': Deno.env.get('ALLOWED_ORIGIN') ?? '*',
+  // Never a wildcard: set ALLOWED_ORIGIN to the portal's origin (falls back to the local dev server).
+  'Access-Control-Allow-Origin': Deno.env.get('ALLOWED_ORIGIN') ?? 'http://localhost:5173',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-cron-secret',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };

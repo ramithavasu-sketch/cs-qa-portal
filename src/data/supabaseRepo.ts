@@ -25,6 +25,18 @@ async function fetchAll<T>(build: (from: number, to: number) => PromiseLike<{ da
 
 const chunks = <T,>(arr: T[], n: number) => Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i * n, i * n + n));
 
+/** Edge Functions answer errors as JSON { error }; supabase-js only says "non-2xx status code". Show the real reason. */
+async function fnErrorMessage(error: { message: string; context?: unknown }): Promise<string> {
+  const res = error.context as Response | undefined;
+  try {
+    if (res && typeof res.json === 'function') {
+      const body = await res.clone().json() as { error?: string };
+      if (body?.error) return body.error;
+    }
+  } catch { /* not JSON */ }
+  return error.message;
+}
+
 export class SupabaseRepo implements Repo {
   readonly mode = 'supabase' as const;
   private sb: SupabaseClient;
@@ -49,6 +61,11 @@ export class SupabaseRepo implements Repo {
         const l = unwrap(await this.sb.from('employees').select('full_name').eq('id', t.lead_id).maybeSingle()) as { full_name: string } | null;
         lead_name = l?.full_name ?? null;
       }
+    }
+    if (!team_name && emp.role !== 'user') {
+      // Team Leads are linked through teams.lead_id rather than their own team_id.
+      const led = unwrap(await this.sb.from('teams').select('name').eq('lead_id', emp.id)) as { name: string }[];
+      team_name = led.map((t) => t.name).join(', ') || null;
     }
     return { ...emp, team_name, lead_name, must_change_password: data.user.user_metadata?.must_change_password === true };
   }
@@ -149,13 +166,17 @@ export class SupabaseRepo implements Repo {
     // parameter labels for list views
     const ids = rows.map((r) => r.id);
     const labels = new Map<string, string[]>();
+    const keys = new Map<string, string[]>();
     const params = new Map((await this.getParameters()).map((p) => [p.id, p.name]));
     for (const c of chunks(ids, CHUNK)) {
       const items = unwrap(await this.sb.from('appeal_items').select('appeal_id, parameter_id, is_autofail').in('appeal_id', c)) as { appeal_id: string; parameter_id: string | null; is_autofail: boolean }[];
-      for (const it of items) labels.set(it.appeal_id, [...(labels.get(it.appeal_id) ?? []), it.is_autofail ? 'Autofail' : params.get(it.parameter_id!) ?? '?']);
+      for (const it of items) {
+        labels.set(it.appeal_id, [...(labels.get(it.appeal_id) ?? []), it.is_autofail ? 'Autofail' : params.get(it.parameter_id!) ?? '?']);
+        keys.set(it.appeal_id, [...(keys.get(it.appeal_id) ?? []), it.is_autofail ? 'AF' : it.parameter_id!]);
+      }
     }
     return rows.map((r) => ({ ...r, original_score: Number(r.original_score), days_in_status: Number(r.days_in_status),
-      item_count: labels.get(r.id)?.length ?? 0, parameters_label: (labels.get(r.id) ?? []).join(', ') }));
+      item_count: labels.get(r.id)?.length ?? 0, parameters_label: (labels.get(r.id) ?? []).join(', '), disputed_keys: keys.get(r.id) ?? [] }));
   }
   async getAppeal(id: string): Promise<AppealDetail | null> {
     const appeal = unwrap(await this.sb.from('v_appeals').select('*').eq('id', id).maybeSingle()) as Appeal | null;
@@ -186,6 +207,8 @@ export class SupabaseRepo implements Repo {
     return this.rpc<string>('submit_appeal', { p_evaluation_id: evaluationId, p_reason: reason, p_items: items, p_as_draft: asDraft });
   }
   async submitDraftAppeal(appealId: string) { await this.rpc('submit_draft_appeal', { p_appeal: appealId }); }
+  async updateDraftAppeal(appealId: string, reason: string, items: unknown[]) { await this.rpc('update_draft_appeal', { p_appeal: appealId, p_reason: reason, p_items: items }); }
+  async shareAppealComment(eventId: string) { await this.rpc('share_appeal_comment', { p_event: eventId }); }
   async leadReviewAppeal(appealId: string, rec: string, comment: string, internalNote?: string) {
     await this.rpc('lead_review_appeal', { p_appeal: appealId, p_recommendation: rec, p_comment: comment, p_internal_note: internalNote ?? null });
   }
@@ -232,17 +255,17 @@ export class SupabaseRepo implements Repo {
     // also block/unblock the login itself (bans the auth user and revokes sessions)
     if (e.id && e.status && e.auth_user_id) {
       const { error } = await this.sb.functions.invoke('admin-users', { body: { action: e.status === 'active' ? 'reactivate' : 'deactivate', employee_id: e.id } });
-      if (error) throw new Error(error.message);
+      if (error) throw new Error(await fnErrorMessage(error));
     }
   }
   async inviteUser(employeeId: string) {
     const { data, error } = await this.sb.functions.invoke('admin-users', { body: { action: 'invite', employee_id: employeeId, redirect_to: `${window.location.origin}${window.location.pathname}` } });
-    if (error) throw new Error(error.message);
+    if (error) throw new Error(await fnErrorMessage(error));
     if (data?.error) throw new Error(data.error);
   }
   async setUserPassword(employeeId: string, password: string) {
     const { data, error } = await this.sb.functions.invoke('admin-users', { body: { action: 'set_password', employee_id: employeeId, password } });
-    if (error) throw new Error(error.message);
+    if (error) throw new Error(await fnErrorMessage(error));
     if (data?.error) throw new Error(data.error);
   }
   async upsertTeam(t: Partial<Team> & { name: string }) {
@@ -267,7 +290,7 @@ export class SupabaseRepo implements Repo {
   }
   async syncGoogleSheet(scope: 'live' | 'all') {
     const { data, error } = await this.sb.functions.invoke('sheets-sync', { body: { scope } });
-    if (error) throw new Error(error.message);
+    if (error) throw new Error(await fnErrorMessage(error));
     if (data?.error) throw new Error(data.error);
     return (data?.results ?? []) as import('../lib/types').SheetSyncResult[];
   }
@@ -275,10 +298,14 @@ export class SupabaseRepo implements Repo {
   async listImportRejections(batchId: string) {
     return unwrap(await this.sb.from('import_rejections').select('row_number, reason').eq('batch_id', batchId).order('row_number').limit(2000)) as ImportRejection[];
   }
-  async listAuditLogs(opts: { limit: number; offset: number; table?: string; action?: string }) {
+  async listAuditLogs(opts: { limit: number; offset: number; table?: string; action?: string; actorId?: string; from?: string; to?: string; record?: string }) {
     let q = this.sb.from('audit_logs').select('*').order('created_at', { ascending: false }).range(opts.offset, opts.offset + opts.limit - 1);
     if (opts.table) q = q.eq('table_name', opts.table);
     if (opts.action) q = q.eq('action', opts.action);
+    if (opts.actorId) q = q.eq('actor_id', opts.actorId);
+    if (opts.from) q = q.gte('created_at', opts.from + 'T00:00:00');
+    if (opts.to) q = q.lte('created_at', opts.to + 'T23:59:59.999');
+    if (opts.record) q = q.eq('record_id', opts.record.trim());
     const rows = unwrap(await q) as AuditLog[];
     const names = new Map((await this.getEmployees()).map((e) => [e.id, e.full_name]));
     return rows.map((r) => ({ ...r, actor_name: r.actor_id ? names.get(r.actor_id) ?? null : 'System' }));
@@ -294,7 +321,7 @@ export class SupabaseRepo implements Repo {
     if (q.queued > 0) {
       // deliver immediately (the send-email function also runs on a schedule as a retry)
       const { data, error } = await this.sb.functions.invoke('send-email', { body: { kind: 'weekly_report' } });
-      if (error) throw new Error(`Emails were queued but could not be sent yet: ${error.message}`);
+      if (error) throw new Error(`Emails were queued but could not be sent yet: ${await fnErrorMessage(error)}`);
       sent = data?.sent ?? 0; failed = data?.failed ?? 0; failures = data?.failures ?? [];
     }
     return { ...q, sent, failed, failures };
@@ -309,6 +336,9 @@ export class SupabaseRepo implements Repo {
   // ---------------------------------------------------------------- notifications
   async listNotifications() {
     return unwrap(await this.sb.from('notifications').select('*').order('created_at', { ascending: false }).limit(100)) as NotificationRow[];
+  }
+  async logExport(info: { scope: string; period: string; format: string }) {
+    try { await this.sb.rpc('log_report_export', { p_scope: info.scope, p_period: info.period, p_format: info.format }); } catch { /* best effort */ }
   }
   async markNotificationsRead(ids?: string[]) { await this.rpc('mark_notifications_read', { p_ids: ids ?? null }); }
 }

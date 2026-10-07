@@ -4,6 +4,10 @@ project_id = "cs-qa-portal"
 [auth]
 enable_signup = false
 jwt_expiry = 3600
+# Same rule as the portal UI: at least 10 characters with letters and digits.
+# On the hosted project set this under Authentication → Policies (Password strength) too.
+minimum_password_length = 10
+password_requirements = "letters_digits"
 [auth.email]
 enable_signup = false
 double_confirm_changes = true

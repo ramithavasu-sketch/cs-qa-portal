@@ -343,7 +343,7 @@ select public.respond_to_appeal_request(public.tid('appeal_af'), 'SB verified at
 reset session authorization;
 select public.test_as('qa@test.co'); set session authorization authenticated;
 select public.qa_decide_appeal(public.tid('appeal_af'),
-  (select jsonb_agg(jsonb_build_object('item_id', id, 'decision', 'approved')) from public.appeal_items where appeal_id = public.tid('appeal_af')),
+  (select jsonb_agg(jsonb_build_object('item_id', id, 'decision', 'approved', 'reason', 'Autofail criteria not met')) from public.appeal_items where appeal_id = public.tid('appeal_af')),
   'Reverted from autofail; marked down for resolution and documentation instead.',
   jsonb_build_array(
     jsonb_build_object('parameter_id', '00000000-0000-4000-a000-000000000401', 'revised_score', 60, 'reason', 'Partial resolution'),

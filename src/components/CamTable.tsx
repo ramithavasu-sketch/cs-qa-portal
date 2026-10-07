@@ -32,11 +32,11 @@ export function CamTable({ rows, settings, showLead = true, pageSize = 15 }: { r
     }), [rows, q, sort]);
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const cur = filtered.slice((page - 1) * pageSize, page * pageSize);
-  const H = ({ k, children, right }: { k: Key; children: React.ReactNode; right?: boolean }) => (
+  const H = ({ k, children, right, term }: { k: Key; children: React.ReactNode; right?: boolean; term?: string }) => (
     <th className={th + (right ? ' text-right' : '')} aria-sort={sort.k === k ? (sort.dir === 1 ? 'ascending' : 'descending') : 'none'}>
       <button className="inline-flex items-center gap-0.5 uppercase" onClick={() => setSort((s) => ({ k, dir: s.k === k ? (s.dir === 1 ? -1 : 1) : k === 'name' || k === 'lead' ? 1 : -1 }))}>
         {children}{sort.k === k && (sort.dir === 1 ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
-      </button>
+      </button>{term && <span className="ml-1 inline-flex align-middle normal-case"><InfoTip term={term} /></span>}
     </th>
   );
   return (
@@ -51,9 +51,9 @@ export function CamTable({ rows, settings, showLead = true, pageSize = 15 }: { r
       </div>
       <Table>
         <thead><tr>
-          <H k="name">CAM Name</H>{showLead && <H k="lead">Team Lead</H>}<H k="tasks" right>Tasks Audited</H><H k="avg" right>Average QA Score</H>
-          <H k="prev" right>Previous Period</H><H k="variance" right>Score Variance</H><H k="autofails" right>Autofails</H><H k="appeals" right>Appeals</H>
-          <th className={th}>Appeal Status</th><th className={th}><span className="inline-flex items-center gap-1">Trend <InfoTip text="Last 6 audit weeks. Dashed line = QA target. Gaps = No Data." /></span></th>
+          <H k="name">CAM Name</H>{showLead && <H k="lead">Team Lead</H>}<H k="tasks" right term="Tasks Audited">Tasks Audited</H><H k="avg" right term="Average QA Score">Average QA Score</H>
+          <H k="prev" right>Previous Period</H><H k="variance" right term="Score Variance">Score Variance</H><H k="autofails" right term="Autofails">Autofails</H><H k="appeals" right>Appeals</H>
+          <th className={th}><span className="inline-flex items-center gap-1">Appeal Status <InfoTip text="Appeals on tasks in the selected period: open / total, or how many were resolved." /></span></th><th className={th}><span className="inline-flex items-center gap-1">Trend <InfoTip text="Last 6 audit weeks. Dashed line = QA target. Gaps = No Data." /></span></th>
         </tr></thead>
         <tbody>
           {cur.map((r) => (
@@ -73,7 +73,7 @@ export function CamTable({ rows, settings, showLead = true, pageSize = 15 }: { r
               <td className={td}><Sparkline values={r.trend} settings={settings} /></td>
             </tr>
           ))}
-          {cur.length === 0 && <tr><td colSpan={10} className="px-3 py-8 text-center text-muted">No CAMs match these filters.</td></tr>}
+          {cur.length === 0 && <tr><td colSpan={10} className="px-3 py-8 text-center text-muted">{rows.length === 0 ? 'No QA evaluations are available for this reporting period.' : 'No CAMs match these filters.'}</td></tr>}
         </tbody>
       </Table>
       <Pagination page={page} pages={pages} onPage={setPage} />

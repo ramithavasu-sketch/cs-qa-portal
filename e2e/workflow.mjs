@@ -68,6 +68,7 @@ await page.goto(appealUrl); await page.waitForSelector('text=Record final decisi
 await page.locator('input[type=radio][id$="-approved"]').first().check();
 const rev = page.locator('input[id^="rev-"]').first();
 const max = await rev.getAttribute('max'); await rev.fill(max);
+await page.locator('input[id^="reason-"]').first().fill('Step confirmed in the task notes.');
 await page.fill('#qa-res', 'Approved — evidence confirms the step was completed.');
 await page.click('button:has-text("Record final decision")');
 await page.waitForSelector('text=Decision: Approved');

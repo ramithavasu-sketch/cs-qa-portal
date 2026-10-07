@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ShieldCheck } from 'lucide-react';
 import { useApp } from '../app/context';
-import { repo, demoRepo, localRepo } from '../data';
+import { repo, demoRepo, localRepo, isGoogle } from '../data';
+import { googleIdentity } from '../data/googleRepo';
 import { DEMO_PASSWORD } from '../demo/generate';
 import { Button, ErrorBox, Field, inputCls } from '../components/ui';
 
@@ -51,7 +52,24 @@ function LocalSetup() {
   );
 }
 
+/** Google version: there is no sign-in form — Google tells the portal who you are. */
+function GoogleNoAccess() {
+  const { email, error } = googleIdentity;
+  return (
+    <Shell title={error ? 'The portal could not load' : 'You don’t have access yet'}
+      subtitle={error ? undefined : email ? `You’re signed in to Google as ${email}.` : 'Google didn’t tell the portal which account you’re using.'}>
+      <div className="flex flex-col gap-3 text-[13.5px]">
+        {error ? <ErrorBox error={new Error(error)} />
+          : email ? <p>This account isn’t set up in the CS QA Portal. Ask the QA team to add <strong>{email}</strong> under Users &amp; Roles, then reload this page.</p>
+          : <p>Open the portal link in a browser where you’re signed in with your company Google account. If you use several Google accounts, try an incognito window with only your work account.</p>}
+        <Button variant="secondary" onClick={() => location.reload()}>Reload</Button>
+      </div>
+    </Shell>
+  );
+}
+
 export function LoginPage() {
+  if (isGoogle) return <GoogleNoAccess />;
   if (localRepo?.needsSetup()) return <LocalSetup />;
   return <LoginForm />;
 }

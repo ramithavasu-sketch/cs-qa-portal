@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useId, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import clsx from 'clsx';
-import { Info, Loader2, X, CheckCircle2, AlertTriangle, ArrowUpRight, ArrowDownRight, Minus } from 'lucide-react';
+import { Info, Loader2, X, CheckCircle2, AlertTriangle, ArrowUpRight, ArrowDownRight, Minus, Check, XCircle } from 'lucide-react';
 import { band, BAND_LABEL, fmtPct, fmtPp, METRIC_DEFINITIONS, APPEAL_STATUS_LABEL } from '../lib/metrics';
 import type { AppealStatus, PortalSettings } from '../lib/types';
 
@@ -44,11 +44,16 @@ export function Card({ title, subtitle, actions, children, className, pad = true
 }
 
 const BAND_CLS = { green: 'bg-good-soft text-good', amber: 'bg-warn-soft text-warn', red: 'bg-bad-soft text-bad', none: 'bg-sunken text-muted' };
+// A distinct icon per band so the result never depends on colour alone.
+const BAND_ICON = { green: Check, amber: AlertTriangle, red: XCircle, none: null };
 export function ScoreBadge({ score, settings, showLabel = false }: { score: number | null; settings: PortalSettings; showLabel?: boolean }) {
   const b = band(score, settings);
+  const Icon = BAND_ICON[b];
   return (
     <span className={clsx('inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[13px] font-semibold tnum', BAND_CLS[b])} title={BAND_LABEL[b]}>
+      {Icon && <Icon className="h-3 w-3 shrink-0" aria-hidden />}
       {fmtPct(score)}
+      {!showLabel && b !== 'none' && <span className="sr-only">({BAND_LABEL[b]})</span>}
       {showLabel && <span className="font-medium">· {BAND_LABEL[b]}</span>}
     </span>
   );

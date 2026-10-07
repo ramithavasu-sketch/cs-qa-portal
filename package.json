@@ -12,7 +12,11 @@
     "test": "vitest run",
     "test:db": "./scripts/test-db.sh",
     "gen:sql": "node scripts/gen-reference-sql.ts",
-    "local": "VITE_DATA_MODE=local vite"
+    "local": "VITE_DATA_MODE=local vite",
+    "google:build": "tsc -b && node scripts/build-google.mjs",
+    "google:login": "clasp login",
+    "google:deploy": "node scripts/google-deploy.mjs",
+    "test:google": "node scripts/build-google.mjs && node e2e/google-api.mjs && node e2e/google-ui.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",
@@ -29,6 +33,7 @@
     "recharts": "^3.10.1"
   },
   "devDependencies": {
+    "@google/clasp": "^3.4.1",
     "@types/node": "^24.19.0",
     "@types/papaparse": "^5.5.2",
     "@types/react": "^19.2.18",

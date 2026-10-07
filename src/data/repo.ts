@@ -4,6 +4,7 @@ import type {
   QaDecisionInput, Role, ScoreAdjustment, SubmitAppealItem, TaskType, Team, WeeklyEmailRow, WeeklyEmailResult, TeamMappingRow, TeamMappingResult, HistoricalCam, SheetSyncResult,
 } from '../lib/types';
 import type { ImportRow } from '../../supabase/functions/_shared/mapper';
+import type { SetupFile } from './demoRepo';
 
 /**
  * Every screen talks to the backend through this interface.
@@ -13,7 +14,8 @@ import type { ImportRow } from '../../supabase/functions/_shared/mapper';
  *    used for the public demo only.
  */
 export interface Repo {
-  readonly mode: 'supabase' | 'demo' | 'local';
+  /** google = Google Workspace version (Apps Script web app, Google sign-in, data in the owner's Drive). */
+  readonly mode: 'supabase' | 'demo' | 'local' | 'google';
 
   // ---- auth
   currentUser(): Promise<Me | null>;
@@ -42,6 +44,10 @@ export interface Repo {
   getAppeal(id: string): Promise<AppealDetail | null>;
   submitAppeal(evaluationId: string, reason: string, items: SubmitAppealItem[], asDraft?: boolean): Promise<string>;
   submitDraftAppeal(appealId: string): Promise<void>;
+  /** CAM: change a draft's reason and disputed parameters before submitting it. */
+  updateDraftAppeal(appealId: string, reason: string, items: SubmitAppealItem[]): Promise<void>;
+  /** Lead (author) or QA: make an internal comment visible to the CAM. */
+  shareAppealComment(eventId: string): Promise<void>;
   leadReviewAppeal(appealId: string, rec: LeadRecommendation, comment: string, internalNote?: string): Promise<void>;
   respondToAppealRequest(appealId: string, response: string): Promise<void>;
   addAppealComment(appealId: string, comment: string, internal: boolean): Promise<void>;
@@ -58,7 +64,7 @@ export interface Repo {
   setPeriodStatus(periodId: string, status: 'draft' | 'published'): Promise<void>;
   upsertPeriod(p: Partial<Period> & { label: string; start_date: string; end_date: string }): Promise<void>;
   updateSetting<K extends keyof PortalSettings>(key: K, value: PortalSettings[K]): Promise<void>;
-  updateParameter(id: string, patch: Partial<Pick<Parameter, 'name' | 'max_score' | 'active' | 'sort_order' | 'section'>>): Promise<void>;
+  updateParameter(id: string, patch: Partial<Pick<Parameter, 'name' | 'max_score' | 'active' | 'sort_order' | 'section' | 'criteria'>>): Promise<void>;
   createParameter(p: Omit<Parameter, 'id'>): Promise<void>;
   upsertEmployee(e: Partial<Employee> & { email: string; full_name: string; role: Role }): Promise<void>;
   inviteUser(employeeId: string): Promise<void>;
@@ -69,10 +75,12 @@ export interface Repo {
   importEvaluations(rows: ImportRow[], meta: { source: 'csv' | 'xlsx' | 'google_sheets'; file_name: string; publish_new_periods: boolean },
     onProgress?: (done: number, total: number) => void): Promise<{ batch_id: string; total: number; inserted: number; duplicates: number; rejected: number }>;
   /** Server-side sync (deployed portal): scope 'live' = live form, 'all' = live + archive tabs. */
-  syncGoogleSheet(scope: 'live' | 'all'): Promise<SheetSyncResult[]>;
+  syncGoogleSheet(scope: 'live' | 'all' | string[]): Promise<SheetSyncResult[]>;
   listImportBatches(): Promise<ImportBatch[]>;
   listImportRejections(batchId: string): Promise<ImportRejection[]>;
-  listAuditLogs(opts: { limit: number; offset: number; table?: string; action?: string }): Promise<AuditLog[]>;
+  /** Records a report download in the audit log (best effort; never blocks the download). */
+  logExport(info: { scope: string; period: string; format: string }): Promise<void>;
+  listAuditLogs(opts: { limit: number; offset: number; table?: string; action?: string; actorId?: string; from?: string; to?: string; record?: string }): Promise<AuditLog[]>;
 
   // ---- weekly report emails & team mapping
   weeklyEmailPreview(periodId: string): Promise<WeeklyEmailRow[]>;
@@ -82,6 +90,10 @@ export interface Repo {
   // ---- archived (name-only) CAMs
   historicalCams(): Promise<HistoricalCam[]>;
   mergeEmployee(fromId: string, intoId: string): Promise<{ moved: number }>;
+
+  // ---- moving from local review to the Google version (local and google modes only)
+  exportSetup?(): Promise<SetupFile>;
+  importSetup?(file: SetupFile): Promise<{ employees: number; teams: number }>;
 
   // ---- notifications
   listNotifications(): Promise<NotificationRow[]>;

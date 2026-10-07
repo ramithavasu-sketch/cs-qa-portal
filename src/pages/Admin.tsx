@@ -3,13 +3,23 @@ import { Copy, Eye, EyeOff, KeyRound, RefreshCw } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import Papa from 'papaparse';
 import { useApp, useAsync, useRef_ } from '../app/context';
-import { repo, isDemo, isLocal } from '../data';
+import { repo, isDemo, isLocal, isGoogle } from '../data';
 import { SheetSourcesCard } from '../components/SheetSync';
+import { AutomationCard, SetupTransferCard } from '../components/GoogleSetup';
 import { PageHeader } from '../components/Layout';
-import { Button, Card, ConfirmModal, EmptyState, ErrorBox, Field, Loading, Modal, Pagination, Pill, Table, td, th, inputCls, inputBase, useToast } from '../components/ui';
+import { Button, Card, ConfirmModal, EmptyState, ErrorBox, Field, Loading, Modal, Pagination, Pill, Table, td, th, inputCls, inputBase, textareaCls, useToast } from '../components/ui';
 import { fmtDateTime, fmtRange } from '../lib/metrics';
-import { mapAuditRows, DEFAULT_COLUMN_MAP, formatWeekLabel, type MapperResult } from '../../supabase/functions/_shared/mapper';
+import { mapAuditRows, headerKey, DEFAULT_COLUMN_MAP, REQUIRED_KEYS, formatWeekLabel, type ColumnMap, type MapperResult } from '../../supabase/functions/_shared/mapper';
+import { saveBlob } from '../lib/report';
 import type { Employee, Parameter, Period, PortalSettings, Role, Team, TeamMappingRow, TeamMappingResult } from '../lib/types';
+
+const NOTIFICATION_TYPES: [string, string][] = [
+  ['report_published', 'Weekly report published'], ['appeal_submitted', 'Appeal submitted / CAM responded'], ['appeal_forwarded', 'Appeal forwarded to QA'],
+  ['appeal_returned', 'Appeal returned for clarification'], ['appeal_info_requested', 'QA requested information'], ['appeal_decided', 'Final decision / appeal closed'],
+  ['appeal_reopened', 'Appeal reopened'], ['score_changed', 'Finalized score changed'], ['appeal_due_soon', 'Review deadline approaching'], ['appeal_overdue', 'Review deadline exceeded'],
+];
+/** ISO timestamp -> value for <input type="datetime-local"> in this browser's time zone. */
+const toLocalInput = (iso: string) => { const d = new Date(iso); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
 
 const ROLE_NAME: Record<Role, string> = { super_admin: 'Super Admin (QA)', admin: 'Admin (Team Lead)', user: 'User (CAM)' };
 
@@ -29,7 +39,8 @@ export function UsersPage() {
   return (
     <div className="flex flex-col gap-5">
       {isLocal && <p className="rounded bg-info-soft px-3 py-2 text-[13px] text-info">Local review mode runs only on this computer, so invitation emails can’t be sent from here. You can set a temporary password for anyone with <strong>Set password</strong> — they can then sign in on this computer only (useful for checking what a Lead or CAM sees). Once the portal is deployed, the same button lets people sign in from anywhere.</p>}
-      <PageHeader title="Users & Roles" subtitle="Only people with an active record here can sign in — either by accepting an invitation or with a temporary password you set. Temporary passwords must be changed at first sign-in."
+      {isGoogle && <p className="rounded bg-info-soft px-3 py-2 text-[13px] text-info">Everyone signs in with their company Google account — no passwords. Anyone you add here (with their work email) can open the portal link straight away and sees only what their role allows. <strong>Send invite</strong> emails them the link.</p>}
+      <PageHeader title="Users & Roles" subtitle={isGoogle ? 'Only people with an active record here can open the portal.' : 'Only people with an active record here can sign in — either by accepting an invitation or with a temporary password you set. Temporary passwords must be changed at first sign-in.'}
         actions={<Button onClick={() => setEdit({ role: 'user', status: 'active' })}>Add user</Button>} />
       <div className="flex flex-wrap gap-3">
         <input aria-label="Search" className={inputBase + ' w-64'} placeholder="Search name or email" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
@@ -43,15 +54,15 @@ export function UsersPage() {
             <tr key={e.id}>
               <td className={td + ' font-medium'}>{e.full_name}</td><td className={td + ' text-muted'}>{e.email}</td><td className={td}>{ROLE_NAME[e.role]}</td>
               <td className={td}>{e.role === 'admin' ? ref.teams.filter((t) => t.lead_id === e.id).map((t) => t.name).join(', ') || '—' : teamName(e.team_id)}</td>
-              <td className={td}>{isDemo || e.auth_user_id ? <Pill tone="good">Login ready</Pill> : <Pill>No login yet</Pill>}</td>
+              <td className={td}>{isGoogle ? (e.email.endsWith('.invalid') ? <Pill tone="warn">Email needed</Pill> : <Pill tone="good">Google sign-in</Pill>) : isDemo || e.auth_user_id ? <Pill tone="good">Login ready</Pill> : <Pill>No login yet</Pill>}</td>
               <td className={td}>{e.status === 'active' ? <Pill tone="good">Active</Pill> : <Pill tone="bad">Deactivated</Pill>}</td>
               <td className={td + ' whitespace-nowrap'}>
                 <Button size="sm" variant="ghost" onClick={() => setEdit(e)}>Edit</Button>
                 {e.id !== me!.id && <Button size="sm" variant="ghost" onClick={async () => {
                   try { await repo.upsertEmployee({ ...e, status: e.status === 'active' ? 'inactive' : 'active' }); await reloadRef(); toast(e.status === 'active' ? 'User deactivated.' : 'User reactivated.'); } catch (x) { toast(String((x as Error).message), 'bad'); }
                 }}>{e.status === 'active' ? 'Deactivate' : 'Reactivate'}</Button>}
-                {e.id !== me!.id && e.status === 'active' && !e.email.endsWith('.invalid') && <Button size="sm" variant="ghost" onClick={() => setPwFor(e)}><KeyRound className="h-4 w-4" />{e.auth_user_id ? 'Reset password' : 'Set password'}</Button>}
-                {!e.auth_user_id && e.status === 'active' && !isLocal && <Button size="sm" variant="ghost" onClick={async () => { try { await repo.inviteUser(e.id); toast(isDemo ? 'Demo: invitation recorded (no email sent).' : `Invitation emailed to ${e.email}.`); } catch (x) { toast((x as Error).message, 'bad'); } }}>Send invite</Button>}
+                {!isGoogle && e.id !== me!.id && e.status === 'active' && !e.email.endsWith('.invalid') && <Button size="sm" variant="ghost" onClick={() => setPwFor(e)}><KeyRound className="h-4 w-4" />{e.auth_user_id ? 'Reset password' : 'Set password'}</Button>}
+                {(isGoogle ? e.id !== me!.id && !e.email.endsWith('.invalid') : !e.auth_user_id) && e.status === 'active' && !isLocal && <Button size="sm" variant="ghost" onClick={async () => { try { await repo.inviteUser(e.id); toast(isDemo ? 'Demo: invitation recorded (no email sent).' : `Invitation emailed to ${e.email}.`); } catch (x) { toast((x as Error).message, 'bad'); } }}>Send invite</Button>}
               </td>
             </tr>
           ))}</tbody>
@@ -59,7 +70,8 @@ export function UsersPage() {
         <Pagination page={page} pages={pages} onPage={setPage} />
       </Card>
       <HistoricalNames />
-      {edit && <UserModal value={edit} teams={ref.teams} onClose={() => setEdit(null)} onSaved={async () => { await reloadRef(); setEdit(null); toast('User saved.'); }} />}
+      {isLocal && <SetupTransferCard />}
+      {edit && <UserModal value={edit} teams={ref.teams} isSelf={edit.id === me!.id} ledTeams={edit.id ? ref.teams.filter((t) => t.lead_id === edit.id).map((t) => t.name) : []} onClose={() => setEdit(null)} onSaved={async () => { await reloadRef(); setEdit(null); toast('User saved.'); }} />}
       {pwFor && <SetPasswordModal user={pwFor} onClose={() => setPwFor(null)} onSaved={reloadRef} />}
     </div>
   );
@@ -154,15 +166,20 @@ function HistoricalNames() {
   );
 }
 
-function UserModal({ value, teams, onClose, onSaved }: { value: Partial<Employee>; teams: Team[]; onClose: () => void; onSaved: () => void }) {
+function UserModal({ value, teams, isSelf, ledTeams, onClose, onSaved }: { value: Partial<Employee>; teams: Team[]; isSelf: boolean; ledTeams: string[]; onClose: () => void; onSaved: () => void }) {
   const [v, setV] = useState(value); const [busy, setBusy] = useState(false); const [err, setErr] = useState<unknown>(null);
   return (
     <Modal open title={v.id ? 'Edit user' : 'Add user'} onClose={onClose} footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button>
-      <Button loading={busy} onClick={async () => { setBusy(true); setErr(null); try { await repo.upsertEmployee(v as Employee); onSaved(); } catch (x) { setErr(x); } finally { setBusy(false); } }}>Save</Button></>}>
+      <Button loading={busy} onClick={async () => {
+        setErr(null);
+        if (!v.full_name?.trim()) return setErr(new Error('Enter the full name.'));
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test((v.email ?? '').trim())) return setErr(new Error('Enter a valid company email address.'));
+        setBusy(true); try { await repo.upsertEmployee(v as Employee); onSaved(); } catch (x) { setErr(x); } finally { setBusy(false); } }}>Save</Button></>}>
       <div className="flex flex-col gap-3">
         <Field label="Full name" htmlFor="u-name" required><input id="u-name" className={inputCls} value={v.full_name ?? ''} onChange={(e) => setV({ ...v, full_name: e.target.value })} /></Field>
         <Field label="Company email" htmlFor="u-email" required hint="Must match the CAM Name email used in the audit sheet."><input id="u-email" type="email" className={inputCls} value={v.email ?? ''} onChange={(e) => setV({ ...v, email: e.target.value })} /></Field>
-        <Field label="Role" htmlFor="u-role"><select id="u-role" className={inputCls} value={v.role} onChange={(e) => setV({ ...v, role: e.target.value as Role })}>{(Object.keys(ROLE_NAME) as Role[]).map((r) => <option key={r} value={r}>{ROLE_NAME[r]}</option>)}</select></Field>
+        <Field label="Role" htmlFor="u-role" hint={isSelf ? 'You cannot change your own role. Ask another Super Admin.' : v.role === 'admin' ? (ledTeams.length ? `Leads: ${ledTeams.join(', ')}. Change team leadership under Teams.` : 'Assign the teams this Lead manages under Teams.') : undefined}>
+          <select id="u-role" className={inputCls} disabled={isSelf} value={v.role} onChange={(e) => setV({ ...v, role: e.target.value as Role })}>{(Object.keys(ROLE_NAME) as Role[]).map((r) => <option key={r} value={r}>{ROLE_NAME[r]}</option>)}</select></Field>
         {v.role === 'user' && <Field label="Team" htmlFor="u-team" hint="Appeals are routed to this team’s Lead."><select id="u-team" className={inputCls} value={v.team_id ?? ''} onChange={(e) => setV({ ...v, team_id: e.target.value || null })}><option value="">No team</option>{teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></Field>}
         <ErrorBox error={err} />
       </div>
@@ -280,7 +297,7 @@ export function ScoringPage() {
   const toast = useToast();
   const [draft, setDraft] = useState<Record<string, Partial<Parameter>>>({});
   const [adding, setAdding] = useState<string | null>(null);
-  const [newP, setNewP] = useState({ name: '', max_score: '10', section: '' });
+  const [newP, setNewP] = useState({ name: '', max_score: '10', section: '', criteria: '' });
   const [confirm, setConfirm] = useState<string | null>(null);
   const [err, setErr] = useState<unknown>(null);
   const save = async (type: string) => {
@@ -304,12 +321,14 @@ export function ScoringPage() {
           <Card key={t.code} title={t.name} subtitle={<>Audit form label: “{t.source_label}” · Active total <strong className={total === 100 ? 'text-good' : 'text-bad'}>{total}</strong> / 100</>}
             actions={<><Button size="sm" variant="secondary" onClick={() => setAdding(t.code)}>Add parameter</Button><Button size="sm" disabled={!dirty} onClick={() => setConfirm(t.code)}>Save changes</Button></>} pad={false}>
             <Table>
-              <thead><tr><th className={th}>Parameter</th><th className={th}>Section</th><th className={th + ' text-right'}>Max score</th><th className={th}>Sheet column</th><th className={th}>Active</th></tr></thead>
+              <thead><tr><th className={th}>Order</th><th className={th}>Parameter</th><th className={th}>Category / section</th><th className={th + ' text-right'}>Max score</th><th className={th}>Scoring criteria (shown in appeals)</th><th className={th}>Sheet column</th><th className={th}>Active</th></tr></thead>
               <tbody>{ps.map((p) => { const v = val(p); return (
                 <tr key={p.id}>
+                  <td className={td}><label htmlFor={`po-${p.id}`} className="sr-only">Order</label><input id={`po-${p.id}`} type="number" className={inputBase + ' w-16 text-right'} value={v.sort_order} onChange={(e) => setDraft((d) => ({ ...d, [p.id]: { ...d[p.id], sort_order: Number(e.target.value) } }))} /></td>
                   <td className={td}><label htmlFor={`pn-${p.id}`} className="sr-only">Name</label><input id={`pn-${p.id}`} className={inputCls} value={v.name} onChange={(e) => setDraft((d) => ({ ...d, [p.id]: { ...d[p.id], name: e.target.value } }))} /></td>
-                  <td className={td + ' text-muted'}>{p.section ?? '—'}</td>
+                  <td className={td}><label htmlFor={`ps-${p.id}`} className="sr-only">Section</label><input id={`ps-${p.id}`} className={inputBase + ' w-36'} placeholder="—" value={v.section ?? ''} onChange={(e) => setDraft((d) => ({ ...d, [p.id]: { ...d[p.id], section: e.target.value || null } }))} /></td>
                   <td className={td + ' text-right'}><label htmlFor={`pm-${p.id}`} className="sr-only">Max</label><input id={`pm-${p.id}`} type="number" min={1} className={inputBase + ' w-20 text-right'} value={v.max_score} onChange={(e) => setDraft((d) => ({ ...d, [p.id]: { ...d[p.id], max_score: e.target.value as unknown as number } }))} /></td>
+                  <td className={td}><label htmlFor={`pc-${p.id}`} className="sr-only">Scoring criteria</label><textarea id={`pc-${p.id}`} rows={1} className={textareaCls + ' min-w-[220px] text-[12.5px]'} placeholder="What earns full marks / what causes a deduction" value={v.criteria ?? ''} onChange={(e) => setDraft((d) => ({ ...d, [p.id]: { ...d[p.id], criteria: e.target.value || null } }))} /></td>
                   <td className={td + ' font-mono text-[11.5px] text-muted'}>{p.source_column?.trim() ?? '—'}</td>
                   <td className={td}><input aria-label="Active" type="checkbox" checked={v.active} onChange={(e) => setDraft((d) => ({ ...d, [p.id]: { ...d[p.id], active: e.target.checked } }))} /></td>
                 </tr>); })}</tbody>
@@ -330,11 +349,13 @@ export function ScoringPage() {
       <ConfirmModal open={!!confirm} title="Save scoring changes" confirmLabel="Save" onClose={() => setConfirm(null)} onConfirm={async () => { try { await save(confirm!); } catch (x) { setErr(x); throw x; } }}
         body={<p>Scoring changes affect how future imports are validated and are written to the audit log. Existing evaluations are not re-scored.</p>} />
       <Modal open={!!adding} title="Add parameter" onClose={() => setAdding(null)} footer={<><Button variant="secondary" onClick={() => setAdding(null)}>Cancel</Button>
-        <Button onClick={async () => { try { await repo.createParameter({ task_type: adding!, name: newP.name, max_score: Number(newP.max_score), section: newP.section || null, sort_order: 99, source_column: null, active: true }); await reloadRef(); setAdding(null); toast('Parameter added.'); } catch (x) { toast((x as Error).message, 'bad'); } }}>Add</Button></>}>
+        <Button onClick={async () => { try { await repo.createParameter({ task_type: adding!, name: newP.name, max_score: Number(newP.max_score), section: newP.section || null, criteria: newP.criteria || null,
+            sort_order: Math.max(0, ...ref.parameters.filter((p) => p.task_type === adding).map((p) => p.sort_order)) + 1, source_column: null, active: true }); await reloadRef(); setAdding(null); toast('Parameter added.'); } catch (x) { toast((x as Error).message, 'bad'); } }}>Add</Button></>}>
         <div className="flex flex-col gap-3">
           <Field label="Name" htmlFor="np-name" required><input id="np-name" className={inputCls} value={newP.name} onChange={(e) => setNewP({ ...newP, name: e.target.value })} /></Field>
           <Field label="Maximum score" htmlFor="np-max" required><input id="np-max" type="number" className={inputCls} value={newP.max_score} onChange={(e) => setNewP({ ...newP, max_score: e.target.value })} /></Field>
-          <Field label="Section (optional)" htmlFor="np-sec"><input id="np-sec" className={inputCls} value={newP.section} onChange={(e) => setNewP({ ...newP, section: e.target.value })} placeholder="e.g. Soft Skills" /></Field>
+          <Field label="Category / section (optional)" htmlFor="np-sec"><input id="np-sec" className={inputCls} value={newP.section} onChange={(e) => setNewP({ ...newP, section: e.target.value })} placeholder="e.g. Soft Skills" /></Field>
+          <Field label="Scoring criteria (optional)" htmlFor="np-crit" hint="Shown to CAMs, Leads and QA when this parameter is appealed."><textarea id="np-crit" rows={3} className={textareaCls} value={newP.criteria} onChange={(e) => setNewP({ ...newP, criteria: e.target.value })} /></Field>
         </div>
       </Modal>
     </div>
@@ -349,23 +370,45 @@ export function PeriodsPage() {
   const [s, setS] = useState<PortalSettings>(ref.settings);
   const [busy, setBusy] = useState<string | null>(null);
   const [newWeek, setNewWeek] = useState(false);
+  const [wpage, setWpage] = useState(1);
   const sorted = [...ref.periods].reverse();
+  const wpages = Math.max(1, Math.ceil(sorted.length / 20));
+  const saveAutoPublish = async (p: Period, value: string) => {
+    const next = value ? new Date(value).toISOString() : null;
+    if ((p.auto_publish_at ?? null) === next) return;
+    try {
+      await repo.upsertPeriod({ id: p.id, label: p.label, start_date: p.start_date, end_date: p.end_date, auto_publish_at: next });
+      await reloadRef(); toast(next ? 'Auto-publish time saved.' : 'Auto-publish time cleared.');
+    } catch (x) { toast((x as Error).message, 'bad'); }
+  };
+  const scheduled = (p: Period) => {
+    // Mirrors period_auto_publish_due(): first chosen weekday after the week ends, at the chosen time (shown in this browser's time).
+    if (!s.reporting.auto_publish) return null;
+    const d = new Date(p.end_date + 'T00:00:00');
+    do d.setDate(d.getDate() + 1); while (((d.getDay() + 6) % 7) + 1 !== s.reporting.auto_publish_dow);
+    return `${d.toDateString().slice(0, 10)} ${s.reporting.auto_publish_time} (${s.reporting.timezone})`;
+  };
   const saveKey = async <K extends keyof PortalSettings>(k: K) => { setBusy(k); try { await repo.updateSetting(k, s[k]); await reloadRef(); toast('Settings saved.'); } catch (x) { toast((x as Error).message, 'bad'); } finally { setBusy(null); } };
   const num = (v: string) => (v === '' ? 0 : Number(v));
   const DOW = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
   return (
     <div className="flex flex-col gap-5">
       <PageHeader title="Reporting Periods & Settings" subtitle="Audit weeks are created automatically from the QA Week label on import. Publishing a week releases every CAM’s report at once — no per-CAM date changes." actions={<Button variant="secondary" onClick={() => setNewWeek(true)}>Add audit week</Button>} />
+      <AutomationCard />
       <Card title="Audit weeks" pad={false}>
         <Table>
           <thead><tr><th className={th}>Week</th><th className={th}>Dates</th><th className={th}>Status</th><th className={th}>Published</th><th className={th}>Auto-publish at</th><th className={th}></th></tr></thead>
-          <tbody>{sorted.slice(0, 20).map((p) => (
+          <tbody>{sorted.slice((wpage - 1) * 20, wpage * 20).map((p) => (
             <tr key={p.id}>
               <td className={td + ' font-medium'}>{p.label}</td><td className={td + ' text-muted'}>{fmtRange(p.start_date, p.end_date)}</td>
               <td className={td}>{p.status === 'published' ? <Pill tone="good">Published</Pill> : <Pill tone="warn">Draft — QA only</Pill>}</td>
               <td className={td + ' text-muted'}>{fmtDateTime(p.published_at)}</td>
-              <td className={td}><label htmlFor={`ap-${p.id}`} className="sr-only">Auto publish</label><input id={`ap-${p.id}`} type="datetime-local" className={inputBase + ' w-auto'} disabled={p.status === 'published'}
-                defaultValue={p.auto_publish_at ? p.auto_publish_at.slice(0, 16) : ''} onBlur={async (e) => { if (!e.target.value) return; await repo.upsertPeriod({ ...p, auto_publish_at: new Date(e.target.value).toISOString() }); await reloadRef(); toast('Auto-publish time saved.'); }} /></td>
+              <td className={td}>{p.status === 'published' ? <span className="text-faint">—</span> : <>
+                <label htmlFor={`ap-${p.id}`} className="sr-only">Auto publish</label>
+                <input id={`ap-${p.id}`} type="datetime-local" className={inputBase + ' w-auto'} defaultValue={p.auto_publish_at ? toLocalInput(p.auto_publish_at) : ''} onBlur={(e) => saveAutoPublish(p, e.target.value)} />
+                {!p.auto_publish_at && scheduled(p) && <div className="text-[11.5px] text-muted">Weekly schedule: {scheduled(p)}</div>}
+                {p.auto_publish_at && <button className="ml-2 text-[12px] text-brand hover:underline" onClick={() => saveAutoPublish(p, '')}>Clear</button>}
+              </>}</td>
               <td className={td}><Button size="sm" variant={p.status === 'published' ? 'ghost' : 'primary'} loading={busy === p.id} onClick={async () => {
                 setBusy(p.id);
                 try { await repo.setPeriodStatus(p.id, p.status === 'published' ? 'draft' : 'published'); await reloadRef(); toast(p.status === 'published' ? `${p.short_label} unpublished.` : `${p.short_label} published. CAMs see it now; use “Email CAMs” to send the weekly emails.`); }
@@ -375,6 +418,7 @@ export function PeriodsPage() {
             </tr>
           ))}</tbody>
         </Table>
+        <Pagination page={wpage} pages={wpages} onPage={setWpage} />
       </Card>
 
       <div className="grid gap-5 lg:grid-cols-2">
@@ -404,17 +448,22 @@ export function PeriodsPage() {
             <Field label="Publish on" htmlFor="s-pdow"><select id="s-pdow" className={inputCls} value={s.reporting.auto_publish_dow} onChange={(e) => setS({ ...s, reporting: { ...s.reporting, auto_publish_dow: num(e.target.value) } })}>{DOW.slice(1).map((d, i) => <option key={d} value={i + 1}>{d}</option>)}</select></Field>
             <Field label="at (local time)" htmlFor="s-ptime"><input id="s-ptime" type="time" className={inputCls} value={s.reporting.auto_publish_time} onChange={(e) => setS({ ...s, reporting: { ...s.reporting, auto_publish_time: e.target.value } })} /></Field>
           </div>
-          <p className="mt-3 text-[12px] text-muted">Scheduled publishing runs through the <code className="font-mono">publish_due_periods()</code> job (pg_cron). See the deployment guide.</p>
+          <p className="mt-3 text-[12px] text-muted">When on, every draft week that has audits is published on the chosen day after the week ends (a time set on an individual week wins). This runs through the <code className="font-mono">publish_due_periods()</code> job, which needs the scheduled job in <code className="font-mono">supabase/cron.sql</code>.</p>
         </Card>
         <Card title="Notifications" actions={<Button size="sm" loading={busy === 'notifications'} onClick={() => saveKey('notifications')}>Save</Button>}>
           <div className="flex flex-col gap-3 text-[13px]">
             <label htmlFor="s-email" className="flex items-center gap-2"><input id="s-email" type="checkbox" checked={s.notifications.email_enabled} onChange={(e) => setS({ ...s, notifications: { ...s.notifications, email_enabled: e.target.checked } })} />Send email notifications (in addition to in-app)</label>
             <Field label="Portal URL used in email links" htmlFor="s-url"><input id="s-url" className={inputCls} value={s.notifications.portal_url} placeholder="https://qa-portal.your-domain.com/#" onChange={(e) => setS({ ...s, notifications: { ...s.notifications, portal_url: e.target.value } })} /></Field>
-            <div className="grid gap-1.5 sm:grid-cols-2">
-              {['report_published', 'appeal_submitted', 'appeal_forwarded', 'appeal_returned', 'appeal_info_requested', 'appeal_decided', 'score_changed', 'appeal_overdue'].map((k) => (
-                <label key={k} htmlFor={`n-${k}`} className="flex items-center gap-2"><input id={`n-${k}`} type="checkbox" checked={s.notifications.in_app[k] !== false} onChange={(e) => setS({ ...s, notifications: { ...s.notifications, in_app: { ...s.notifications.in_app, [k]: e.target.checked } } })} />{k.replace(/_/g, ' ')}</label>
-              ))}
-            </div>
+            <table className="w-full text-[13px]">
+              <thead><tr className="text-left text-[12px] text-muted"><th className="py-1 font-medium">Notification</th><th className="py-1 text-center font-medium">In-app</th><th className="py-1 text-center font-medium">Email</th></tr></thead>
+              <tbody>{NOTIFICATION_TYPES.map(([k, label]) => (
+                <tr key={k} className="border-t border-line">
+                  <td className="py-1.5">{label}</td>
+                  <td className="py-1.5 text-center"><input aria-label={`${label} in-app`} type="checkbox" checked={s.notifications.in_app[k] !== false} onChange={(e) => setS({ ...s, notifications: { ...s.notifications, in_app: { ...s.notifications.in_app, [k]: e.target.checked } } })} /></td>
+                  <td className="py-1.5 text-center"><input aria-label={`${label} email`} type="checkbox" disabled={!s.notifications.email_enabled} checked={(s.notifications.email ?? {})[k] !== false} onChange={(e) => setS({ ...s, notifications: { ...s.notifications, email: { ...(s.notifications.email ?? {}), [k]: e.target.checked } } })} /></td>
+                </tr>
+              ))}</tbody>
+            </table>
             <p className="text-[12px] text-muted">Emails contain only the appeal reference, task ID, status and a secure portal link — never scores, feedback or other CAMs’ data. {isDemo && 'Emails are not sent in demo mode.'}</p>
           </div>
         </Card>
@@ -423,6 +472,10 @@ export function PeriodsPage() {
     </div>
   );
 }
+const AUDIT_ACTIONS = ['score_adjusted', 'appeal_submitted', 'appeal_draft_saved', 'appeal_lead_forwarded', 'appeal_lead_returned', 'appeal_cam_responded', 'appeal_lead_responded',
+  'appeal_qa_requested_info', 'appeal_qa_decided', 'appeal_qa_reopened', 'appeal_closed', 'appeal_comment', 'appeal_comment_shared', 'appeal_item_decision', 'appeal_status',
+  'insert', 'update', 'delete', 'import', 'invite', 'set_password', 'deactivate', 'reactivate', 'merge_employee', 'report_export', 'weekly_emails_queued', 'weekly_emails_failed'];
+
 function NewWeekModal({ onClose, onSaved, weekStart, periods }: { onClose: () => void; onSaved: () => void; weekStart: number; periods: Period[] }) {
   const last = periods[periods.length - 1];
   const nextStart = last ? new Date(Date.parse(last.end_date + 'T00:00:00Z') + 86400000).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
@@ -459,6 +512,8 @@ export function ImportPage() {
   const [summary, setSummary] = useState<{ total: number; inserted: number; duplicates: number; rejected: number } | null>(null);
   const [err, setErr] = useState<unknown>(null);
   const [batch, setBatch] = useState<string | null>(null);
+  const [records, setRecords] = useState<Record<string, string>[] | null>(null);
+  const [colMap, setColMap] = useState<Partial<ColumnMap>>({});
   const batches = useAsync(() => repo.listImportBatches(), [summary]);
   const rejections = useAsync(() => (batch ? repo.listImportRejections(batch) : Promise.resolve([])), [batch]);
   const liveSrc = ref.settings.data_sources.sources.find((s) => s.kind === 'live' && s.gid);
@@ -485,8 +540,8 @@ export function ImportPage() {
         const text = await f.text();
         records = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true }).data;
       }
-      const r = mapAuditRows(records, ref.taskTypes, ref.parameters, { timezoneOffset: tz });
-      setResult(r);
+      setRecords(records);
+      setResult(mapAuditRows(records, ref.taskTypes, ref.parameters, { timezoneOffset: tz, columnMap: colMap }));
     } catch (x) { setErr(x); } finally { setParsing(false); }
   };
   const run = async () => {
@@ -505,6 +560,7 @@ export function ImportPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader title="Data Import & Validation" subtitle="Bring audits in straight from Google Sheets (live form and 2022–2025 archives), or upload a CSV/Excel export. Every row is checked against the scoring rubric of its year before it is saved." />
+      {isGoogle && <SetupTransferCard />}
       <SheetSourcesCard />
       <details className="rounded-lg border border-line bg-surface px-4 py-3 text-[13px]">
         <summary className="cursor-pointer font-medium">No Google connection? Upload a CSV export instead</summary>
@@ -523,8 +579,9 @@ export function ImportPage() {
           </div>
         </Card>
         <Card title="2. Validation report">
-          {!result ? <p className="text-[13px] text-muted">Choose a file to see how many rows are valid.</p> : result.missingColumns.length ? (
-            <ErrorBox error={new Error(`Required columns not found: ${result.missingColumns.join(', ')}`)} />
+          {!result ? <p className="text-[13px] text-muted">Choose a file to see how many rows are valid.</p> : result.missingColumns.length && records ? (
+            <ColumnMapper records={records} map={colMap} missing={result.missingColumns}
+              onApply={(m) => { setColMap(m); setResult(mapAuditRows(records, ref.taskTypes, ref.parameters, { timezoneOffset: tz, columnMap: m })); }} />
           ) : (
             <div className="flex flex-col gap-3 text-[13px]">
               <div className="grid grid-cols-3 gap-2 text-center">
@@ -534,6 +591,7 @@ export function ImportPage() {
               </div>
               {byReason.length > 0 && <div><div className="eyebrow mb-1">Rejection reasons</div><ul className="flex flex-col gap-1">{byReason.map(([r, rows]) => <li key={r}><span className="font-medium tnum">{rows.length}×</span> {r} <span className="text-faint">(rows {rows.slice(0, 8).join(', ')}{rows.length > 8 ? '…' : ''})</span></li>)}</ul></div>}
               <p className="text-muted">Rows already in the portal (same DS Task Link + CAM + QA Week) are skipped, so re-importing the full sheet is safe.</p>
+              <div><Button size="sm" variant="secondary" onClick={() => downloadValidation(file?.name ?? 'import', result)}>Download validation report (CSV)</Button></div>
               <ErrorBox error={err} />
               <Button disabled={!result.rows.length || !!progress} loading={!!progress} onClick={run}>Import {result.rows.length} valid row(s)</Button>
               {progress && <p className="text-muted tnum">Imported {progress[0]} of {progress[1]}…</p>}
@@ -556,18 +614,68 @@ export function ImportPage() {
         )}
       </Card>
       {batch && (rejections.data?.length ?? 0) > 0 && (
-        <Card title="Server-side rejections" pad={false}>
+        <Card title={`Server-side rejections (${rejections.data!.length})`} pad={false}
+          actions={<Button size="sm" variant="secondary" onClick={() => saveBlob(csvBlob([['Row', 'Reason'], ...rejections.data!.map((r) => [r.row_number, r.reason])]), `import_rejections_${batch.slice(0, 8)}.csv`)}>Download all (CSV)</Button>}>
           <Table><thead><tr><th className={th}>Row</th><th className={th}>Reason</th></tr></thead><tbody>{rejections.data!.slice(0, 200).map((r, i) => <tr key={i}><td className={td + ' tnum'}>{r.row_number}</td><td className={td}>{r.reason}</td></tr>)}</tbody></Table>
+          {rejections.data!.length > 200 && <p className="px-3 py-2 text-[12px] text-muted">Showing the first 200 — download the CSV for all of them.</p>}
         </Card>
       )}
     </div>
   );
 }
 
+const csvBlob = (rows: unknown[][]) => {
+  const esc = (v: unknown) => { let x = String(v ?? ''); if (/^[=+\-@]/.test(x)) x = "'" + x; return /[",\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x; };
+  return new Blob(['\uFEFF' + rows.map((r) => r.map(esc).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+};
+/** Accepted, duplicate-in-file and rejected rows with the reason for each, before anything is saved. */
+function downloadValidation(fileName: string, r: MapperResult) {
+  const rows: unknown[][] = [['Row', 'Result', 'Reason', 'CAM', 'Task link', 'QA week', 'Task type', 'Score']];
+  r.rows.forEach((x) => rows.push([x.row_number, 'Valid', '', x.cam_email || x.cam_name, x.task_link, x.period.label, x.task_type, x.score]));
+  r.duplicates.forEach((x) => rows.push([x.row_number, 'Duplicate in file', x.reason]));
+  r.rejections.forEach((x) => rows.push([x.row_number, 'Rejected', x.reason]));
+  rows.sort((a, b) => (typeof a[0] === 'number' && typeof b[0] === 'number' ? a[0] - b[0] : 0));
+  saveBlob(csvBlob(rows), `validation_${fileName.replace(/\.[^.]+$/, '')}.csv`);
+}
+
+/** Lets QA point each required field at a column of the uploaded file when the header names differ. */
+function ColumnMapper({ records, map, missing, onApply }: { records: Record<string, string>[]; map: Partial<ColumnMap>; missing: string[]; onApply: (m: Partial<ColumnMap>) => void }) {
+  const headers = Object.keys(records[0] ?? {});
+  const [m, setM] = useState<Partial<ColumnMap>>(map);
+  const has = (name: string) => headers.some((h) => headerKey(h) === headerKey(name));
+  // fields whose default header is absent from the file (keep showing them so the choice can be changed)
+  const missingKeys = REQUIRED_KEYS.filter((k) => !has(DEFAULT_COLUMN_MAP[k]));
+  return (
+    <div className="flex flex-col gap-3 text-[13px]">
+      <ErrorBox error={new Error(`Required columns not found: ${missing.join(', ')}. Choose which column in your file holds each one.`)} />
+      {missingKeys.map((k) => (
+        <Field key={k} label={DEFAULT_COLUMN_MAP[k]} htmlFor={`cm-${k}`}>
+          <select id={`cm-${k}`} className={inputCls} value={m[k] ?? ''} onChange={(e) => setM({ ...m, [k]: e.target.value || undefined })}>
+            <option value="">Choose a column…</option>{headers.map((h) => <option key={h} value={h}>{h}</option>)}
+          </select>
+        </Field>
+      ))}
+      <div><Button onClick={() => onApply(m)}>Apply column mapping</Button></div>
+    </div>
+  );
+}
+
 // =================================================================== Audit logs
 export function AuditLogPage() {
+  const ref = useRef_();
   const [table, setTable] = useState(''); const [action, setAction] = useState(''); const [page, setPage] = useState(1);
-  const logs = useAsync(() => repo.listAuditLogs({ limit: 50, offset: (page - 1) * 50, table: table || undefined, action: action || undefined }), [table, action, page]);
+  const [actor, setActor] = useState(''); const [from, setFrom] = useState(''); const [to, setTo] = useState(''); const [record, setRecord] = useState('');
+  const filters = { table: table || undefined, action: action || undefined, actorId: actor || undefined, from: from || undefined, to: to || undefined, record: record || undefined };
+  const logs = useAsync(() => repo.listAuditLogs({ limit: 50, offset: (page - 1) * 50, ...filters }), [table, action, actor, from, to, record, page]);
+  const toast = useToast();
+  const exportCsv = async () => {
+    try {
+      const all = await repo.listAuditLogs({ limit: 5000, offset: 0, ...filters });
+      saveBlob(csvBlob([['When', 'Who', 'Action', 'Area', 'Record', 'Reason', 'Previous', 'New'],
+        ...all.map((l) => [l.created_at, l.actor_name ?? 'System', l.action, l.table_name ?? '', l.record_id ?? '', l.reason ?? '', JSON.stringify(l.previous ?? null), JSON.stringify(l.new_value ?? null)])]), 'audit_log.csv');
+      void repo.logExport({ scope: 'Audit log', period: `${from || 'start'}..${to || 'now'}`, format: 'csv' });
+    } catch (x) { toast((x as Error).message, 'bad'); }
+  };
   const [open, setOpen] = useState<number | null>(null);
   return (
     <div className="flex flex-col gap-5">
@@ -576,7 +684,13 @@ export function AuditLogPage() {
         <select aria-label="Area" className={inputBase + ' w-auto'} value={table} onChange={(e) => { setTable(e.target.value); setPage(1); }}>
           <option value="">All areas</option>{['evaluations', 'appeals', 'employees', 'teams', 'evaluation_parameters', 'settings', 'reporting_periods', 'import_batches', 'appeal_resubmission_grants'].map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}</select>
         <select aria-label="Action" className={inputBase + ' w-auto'} value={action} onChange={(e) => { setAction(e.target.value); setPage(1); }}>
-          <option value="">All actions</option>{['score_adjusted', 'appeal_status', 'insert', 'update', 'delete', 'import', 'invite'].map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}</select>
+          <option value="">All actions</option>{AUDIT_ACTIONS.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}</select>
+        <select aria-label="Who" className={inputBase + ' w-auto max-w-[220px]'} value={actor} onChange={(e) => { setActor(e.target.value); setPage(1); }}>
+          <option value="">Anyone</option>{ref.employees.filter((e) => e.role !== 'user').sort((a, b) => a.full_name.localeCompare(b.full_name)).map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select>
+        <label className="flex items-center gap-1.5 text-[13px] text-muted">From<input aria-label="From date" type="date" className={inputBase + ' w-auto'} value={from} onChange={(e) => { setFrom(e.target.value); setPage(1); }} /></label>
+        <label className="flex items-center gap-1.5 text-[13px] text-muted">to<input aria-label="To date" type="date" className={inputBase + ' w-auto'} value={to} onChange={(e) => { setTo(e.target.value); setPage(1); }} /></label>
+        <input aria-label="Record ID" className={inputBase + ' w-64'} placeholder="Record ID (exact)" value={record} onChange={(e) => { setRecord(e.target.value); setPage(1); }} />
+        <Button size="sm" variant="secondary" onClick={exportCsv}>Export CSV</Button>
       </div>
       <Card pad={false}>
         {logs.loading ? <Loading /> : (
@@ -586,7 +700,7 @@ export function AuditLogPage() {
               <tr>
                 <td className={td + ' whitespace-nowrap text-muted'}>{fmtDateTime(l.created_at)}</td><td className={td}>{l.actor_name ?? 'System'}</td>
                 <td className={td}><Pill tone={l.action === 'score_adjusted' ? 'warn' : 'neutral'}>{l.action.replace(/_/g, ' ')}</Pill></td>
-                <td className={td}>{l.table_name?.replace(/_/g, ' ')}</td><td className={td + ' font-mono text-[11.5px]'}>{l.record_id?.slice(0, 12)}</td>
+                <td className={td}>{l.table_name?.replace(/_/g, ' ')}</td><td className={td + ' font-mono text-[11.5px]'}><span title={l.record_id ?? ''} className="break-all">{l.record_id}</span></td>
                 <td className={td + ' max-w-[280px]'}>{l.reason ?? '—'}</td>
                 <td className={td}><Button size="sm" variant="ghost" onClick={() => setOpen(open === l.id ? null : l.id)}>{open === l.id ? 'Hide' : 'Details'}</Button></td>
               </tr>

@@ -42,13 +42,17 @@ export function AppealsPage() {
   const def = tabs.find((t) => t.value === tab)!;
   const list = useMemo(() => (all.data ?? []).filter((a) => (!def.statuses || def.statuses.includes(a.status))
     && (!f.week || a.period_id === f.week) && (!f.cam || a.cam_id === f.cam) && (!f.lead || a.lead_id === f.lead) && (!f.type || a.task_type === f.type)
-    && (!f.param || (a.parameters_label ?? '').includes(f.param)) && (!f.status || a.status === f.status) && (!f.overdue || a.overdue)
+    && (!f.param || (a.disputed_keys ?? []).includes(f.param)) && (!f.status || a.status === f.status) && (!f.overdue || a.overdue)
     && (!f.from || (a.submitted_at ?? a.created_at).slice(0, 10) >= f.from) && (!f.to || (a.submitted_at ?? a.created_at).slice(0, 10) <= f.to)), [all.data, def, f]);
   const count = (t: TabDef) => (all.data ?? []).filter((a) => !t.statuses || t.statuses.includes(a.status)).length;
   const weeks = [...new Map((all.data ?? []).map((a) => [a.period_id, a.period_short_label])).entries()];
   const cams = [...new Map((all.data ?? []).map((a) => [a.cam_id, a.cam_name])).entries()];
   const leads = [...new Map((all.data ?? []).filter((a) => a.lead_id).map((a) => [a.lead_id!, a.lead_name ?? '?'])).entries()];
-  const paramNames = [...new Set(ref.parameters.map((p) => p.name)), 'Autofail'];
+  // exact parameter ids (names repeat across task types), only those that appear in appeals
+  const disputed = new Set((all.data ?? []).flatMap((a) => a.disputed_keys ?? []));
+  const paramOptions: [string, string][] = [...ref.parameters.filter((p) => disputed.has(p.id))
+    .map((p) => [p.id, `${p.name} (${ref.taskTypeNames[p.task_type] ?? p.task_type})`] as [string, string]).sort((x, y) => x[1].localeCompare(y[1])),
+    ...(disputed.has('AF') ? [['AF', 'Autofail'] as [string, string]] : [])];
   const pages = Math.max(1, Math.ceil(list.length / 20));
   const title = me!.role === 'user' ? 'My Appeals' : me!.role === 'admin' ? 'Team Appeal Review Queue' : 'QA Appeal Review Queue';
   const subtitle = me!.role === 'user' ? 'Appeals go to your Team Lead first, then to QA for the final decision.'
@@ -65,7 +69,7 @@ export function AppealsPage() {
         {me!.role !== 'user' && <Sel id="af-cam" label="CAM" value={f.cam} onChange={(v) => set('cam', v)} options={cams} />}
         {me!.role === 'super_admin' && <Sel id="af-lead" label="Team Lead" value={f.lead} onChange={(v) => set('lead', v)} options={leads} />}
         <Sel id="af-type" label="Task type" value={f.type} onChange={(v) => set('type', v)} options={ref.taskTypes.map((t) => [t.code, t.name])} />
-        <Sel id="af-param" label="Disputed parameter" value={f.param} onChange={(v) => set('param', v)} options={paramNames.map((n) => [n, n])} />
+        <Sel id="af-param" label="Disputed parameter" value={f.param} onChange={(v) => set('param', v)} options={paramOptions} />
         <Sel id="af-status" label="Status" value={f.status} onChange={(v) => set('status', v)} options={(Object.keys(APPEAL_STATUS_LABEL) as AppealStatus[]).map((k) => [k, APPEAL_STATUS_LABEL[k]])} />
         <div className="flex flex-col gap-1"><label htmlFor="af-from" className="text-[12px] font-medium text-muted">Submitted from</label><input id="af-from" type="date" className={inputCls} value={f.from} onChange={(e) => set('from', e.target.value)} /></div>
         <div className="flex flex-col gap-1"><label htmlFor="af-to" className="text-[12px] font-medium text-muted">to</label><input id="af-to" type="date" className={inputCls} value={f.to} onChange={(e) => set('to', e.target.value)} /></div>
@@ -95,7 +99,7 @@ export function AppealTable({ rows, role }: { rows: Appeal[]; role: string }) {
     <Table>
       <thead><tr><th className={th}>Reference</th>{role !== 'user' && <th className={th}>CAM</th>}{role === 'super_admin' && <th className={th}>Team Lead</th>}
         <th className={th}>Week</th><th className={th}>Task</th><th className={th}>Disputed</th><th className={th}>Lead recommendation</th><th className={th}>Status</th>
-        <th className={th + ' text-right'}>Days in status</th><th className={th}>Submitted</th></tr></thead>
+        <th className={th + ' text-right'}>Days in status</th><th className={th + ' text-right'}>Days since submitted</th><th className={th}>Submitted</th></tr></thead>
       <tbody>{rows.map((a) => (
         <tr key={a.id} className="cursor-pointer hover:bg-sunken/60" onClick={() => nav(`/appeals/${a.id}`)}>
           <td className={td}><Link onClick={(e) => e.stopPropagation()} to={`/appeals/${a.id}`} className="font-mono text-[12.5px] font-medium text-brand hover:underline">{a.reference}</Link></td>
@@ -107,6 +111,7 @@ export function AppealTable({ rows, role }: { rows: Appeal[]; role: string }) {
           <td className={td + ' whitespace-nowrap text-[12.5px]'}>{a.lead_recommendation ? <Pill tone={a.lead_recommendation === 'recommend_approval' ? 'good' : a.lead_recommendation === 'recommend_rejection' ? 'bad' : 'warn'}>{a.lead_recommendation === 'recommend_approval' ? 'Approve' : a.lead_recommendation === 'recommend_rejection' ? 'Reject' : 'More info'}</Pill> : <span className="text-faint">—</span>}</td>
           <td className={td}><StatusBadge status={a.status} overdue={a.overdue} /></td>
           <td className={td + ' text-right tnum'}>{a.days_in_status.toFixed(1)}</td>
+          <td className={td + ' text-right tnum text-muted'}>{a.submitted_at ? ((((a.decided_at ? Date.parse(a.decided_at) : Date.now()) - Date.parse(a.submitted_at)) / 86400000).toFixed(1)) : '—'}</td>
           <td className={td + ' whitespace-nowrap text-muted'}>{fmtDate(a.submitted_at ?? a.created_at)}</td>
         </tr>
       ))}</tbody>
@@ -118,8 +123,11 @@ export function AppealTable({ rows, role }: { rows: Appeal[]; role: string }) {
 export function NewAppealPage() {
   const { me } = useApp();
   const ref = useRef_();
-  const recent = ref.publishedPeriods.slice(-3).map((p) => p.id);
-  const evals = useAsync(() => repo.getEvaluations({ periodIds: recent, camIds: [me!.id] }), [recent.join(',')]);
+  // every published week whose appeal window could still be open (the exact deadline is checked per task below)
+  const w = ref.settings.appeal_window;
+  const horizon = Date.now() - ((w.business_days ? Math.ceil(w.days * 7 / 5) : w.days) + 3) * 86400000;
+  const recent = ref.publishedPeriods.filter((p) => p.published_at && Date.parse(p.published_at) >= horizon).map((p) => p.id);
+  const evals = useAsync(() => (recent.length ? repo.getEvaluations({ periodIds: recent, camIds: [me!.id] }) : Promise.resolve([])), [recent.join(',')]);
   const deadlines = useAsync(async () => {
     const out: Record<string, string | null> = {};
     for (const e of evals.data ?? []) out[e.id] = await repo.getAppealDeadline(e.id);
@@ -140,7 +148,7 @@ export function NewAppealPage() {
                 <td className={td + ' text-right'}><ScoreBadge score={e.score} settings={ref.settings} /></td>
                 <td className={td + ' text-[12.5px]'}>{e.autofail ? 'Autofail' : e.scores.filter((s) => s.earned !== null && s.earned < s.max_score).map((s) => s.parameter_name).join(', ') || 'None'}</td>
                 <td className={td + ' text-muted whitespace-nowrap'}>{fmtDate(deadlines.data?.[e.id] ?? null)}</td>
-                <td className={td}><Link to={`/evaluations/${e.id}`} className="font-medium text-brand hover:underline">Review &amp; appeal</Link></td>
+                <td className={td}><Link to={`/evaluations/${e.id}?appeal=1`} className="font-medium text-brand hover:underline">Raise appeal</Link></td>
               </tr>
             ))}</tbody>
           </Table>

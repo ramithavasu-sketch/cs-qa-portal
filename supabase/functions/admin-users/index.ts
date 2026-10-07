@@ -43,11 +43,16 @@ Deno.serve(async (req) => {
     }
     if (body.action === 'deactivate' || body.action === 'reactivate') {
       const active = body.action === 'reactivate';
-      await admin.from('employees').update({ status: active ? 'active' : 'inactive' }).eq('id', emp.id);
+      if (!active && emp.id === actor.id) throw new HttpError(400, 'You cannot deactivate your own account');
+      // The database also refuses to deactivate the last active Super Admin; stop before touching the login if it does.
+      const { error: upErr } = await admin.from('employees').update({ status: active ? 'active' : 'inactive' }).eq('id', emp.id);
+      if (upErr) throw new HttpError(400, upErr.message);
       if (emp.auth_user_id) {
-        await admin.auth.admin.updateUserById(emp.auth_user_id, { ban_duration: active ? 'none' : '876000h' });
+        const { error } = await admin.auth.admin.updateUserById(emp.auth_user_id, { ban_duration: active ? 'none' : '876000h' });
+        if (error) throw new HttpError(400, error.message);
       }
-      await admin.from('audit_logs').insert({ actor_id: actor.id, action: body.action, table_name: 'employees', record_id: emp.id });
+      await admin.from('audit_logs').insert({ actor_id: actor.id, action: body.action, table_name: 'employees', record_id: emp.id,
+        previous: { status: emp.status }, new_value: { status: active ? 'active' : 'inactive', email: emp.email }, reason: body.reason ?? null });
       return json({ ok: true });
     }
     throw new HttpError(400, 'Unknown action');

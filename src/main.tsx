@@ -2,6 +2,8 @@ import { Component, StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './index.css';
 import App from './App';
+import { isGoogle } from './data';
+import { applyGoogleDeepLink } from './data/googleRepo';
 
 /** Shows what went wrong instead of a blank page. */
 class CrashScreen extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -21,4 +23,5 @@ class CrashScreen extends Component<{ children: ReactNode }, { error: Error | nu
   }
 }
 
-createRoot(document.getElementById('root')!).render(<StrictMode><CrashScreen><App /></CrashScreen></StrictMode>);
+const start = () => createRoot(document.getElementById('root')!).render(<StrictMode><CrashScreen><App /></CrashScreen></StrictMode>);
+if (isGoogle) applyGoogleDeepLink().then(start, start); else start();

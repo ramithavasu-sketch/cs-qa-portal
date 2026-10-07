@@ -1,0 +1,5 @@
+{
+  "extends": "../tsconfig.app.json",
+  "compilerOptions": { "tsBuildInfoFile": "../node_modules/.tmp/tsconfig.server.tsbuildinfo" },
+  "include": ["./*.ts", "../src/data/demoRepo.ts", "../src/data/googleApi.ts", "../src/vite-env.d.ts"]
+}

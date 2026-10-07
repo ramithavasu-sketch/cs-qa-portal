@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ExternalLink, Scale } from 'lucide-react';
 import { useApp, useAsync, useRef_ } from '../app/context';
 import { useScopeData } from '../app/useScope';
@@ -8,8 +8,8 @@ import { PageHeader } from '../components/Layout';
 import { PeriodPicker, usePeriodSelection } from '../components/PeriodPicker';
 import { Button, Card, EmptyState, ErrorBox, Field, Loading, Modal, Pill, ScoreBadge, StatusBadge, Table, td, th, inputCls, inputBase, textareaCls, useToast } from '../components/ui';
 import { EvaluationsTable } from '../components/shared';
-import { fmtDate, fmtDateTime, fmtPct } from '../lib/metrics';
-import type { Evaluation } from '../lib/types';
+import { appealWindowOpen, fmtDate, fmtDateTime, fmtPct } from '../lib/metrics';
+import type { AppealItem, Evaluation } from '../lib/types';
 
 // ------------------------------------------------------------------ list
 export function EvaluationsPage() {
@@ -44,7 +44,7 @@ export function EvaluationsPage() {
         </div>
       </Card>
       <ErrorBox error={data.error} />
-      {data.loading ? <Loading /> : <Card pad={false}><EvaluationsTable evals={rows} settings={ref.settings} showCam={me!.role !== 'user'} pageSize={25} appealedIds={appealed} /></Card>}
+      {data.loading ? <Loading /> : <Card pad={false}><EvaluationsTable evals={rows} settings={ref.settings} showCam={me!.role !== 'user'} pageSize={25} appealedIds={appealed} canAppeal={me!.role === 'user' ? (e) => appealWindowOpen(e, ref.settings) : undefined} /></Card>}
     </div>
   );
 }
@@ -59,7 +59,14 @@ export function EvaluationDetailPage() {
   const adj = useAsync(() => repo.getAdjustments(id!), [id]);
   const deadline = useAsync(() => repo.getAppealDeadline(id!), [id]);
   const appeals = useAsync(() => repo.listAppeals({ evaluationId: id }), [id]);
-  const [appealOpen, setAppealOpen] = useState(false);
+  // ?appeal=1[&param=<parameter id>|AF] opens the appeal form directly (links from task lists and the Appeals page)
+  const [sp, setSp] = useSearchParams();
+  const [appealOpen, setAppealOpenState] = useState(sp.get('appeal') === '1');
+  const [preselect, setPreselect] = useState<string | null>(sp.get('param'));
+  const setAppealOpen = (open: boolean, param: string | null = null) => {
+    setAppealOpenState(open); setPreselect(param);
+    if (!open && sp.has('appeal')) { const n = new URLSearchParams(sp); n.delete('appeal'); n.delete('param'); setSp(n, { replace: true }); }
+  };
   const [adjustOpen, setAdjustOpen] = useState(false);
   if (ev.loading) return <Loading />;
   if (!ev.data) return <EmptyState title="Evaluation not available" body="It may not exist, may not be published yet, or is outside your access." action={<Link to="/evaluations" className="text-brand">Back to evaluations</Link>} />;
@@ -68,6 +75,8 @@ export function EvaluationDetailPage() {
   const windowOpen = !!deadline.data && Date.now() <= Date.parse(deadline.data);
   const sections = [...new Set(e.scores.map((x) => x.section ?? ''))];
   const paramName = (pid: string | null) => (pid ? ref.parameters.find((p) => p.id === pid)?.name ?? '?' : 'Autofail');
+  const canAppeal = isOwner && windowOpen;
+  const activeAppealKeys = new Set((appeals.data ?? []).filter((a) => a.status !== 'closed').flatMap((a) => a.disputed_keys ?? []));
   return (
     <div className="flex flex-col gap-5">
       <Link to="/evaluations" className="inline-flex items-center gap-1 text-[13px] text-brand hover:underline"><ArrowLeft className="h-4 w-4" />All evaluations</Link>
@@ -79,23 +88,28 @@ export function EvaluationDetailPage() {
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <Card title="Scores by parameter" subtitle="Earned score against the maximum for each parameter in this task type." pad={false}>
           <Table>
-            <thead><tr><th className={th}>Parameter</th><th className={th + ' text-right'}>Max</th><th className={th + ' text-right'}>Earned</th><th className={th}>Result</th></tr></thead>
+            <thead><tr><th className={th}>Parameter</th><th className={th + ' text-right'}>Max</th><th className={th + ' text-right'}>Earned</th><th className={th}>Result</th>{isOwner && <th className={th}><span className="sr-only">Appeal</span></th>}</tr></thead>
             <tbody>
               {sections.map((sec) => (<FragmentBlock key={sec} sec={sec}>
                 {e.scores.filter((x) => (x.section ?? '') === sec).map((x) => (
                   <tr key={x.id}>
-                    <td className={td + ' font-medium'}>{x.parameter_name}</td>
+                    <td className={td}><span className="font-medium">{x.parameter_name}</span>{x.remarks && <div className="mt-0.5 text-[12px] text-muted"><span className="eyebrow mr-1">QA remark</span>{x.remarks}</div>}</td>
                     <td className={td + ' text-right tnum'}>{x.max_score}</td>
                     <td className={td + ' text-right tnum'}>
                       {x.earned === null ? 'NA' : x.earned}
                       {x.adjusted && <div className="text-[11px] text-muted">original {x.original_earned ?? 'NA'}</div>}
                     </td>
                     <td className={td}>{x.earned === null ? <Pill>Not applicable</Pill> : e.autofail ? <Pill tone="bad">Autofail</Pill> : x.earned < x.max_score ? <Pill tone="bad">Deducted {x.max_score - x.earned}</Pill> : <Pill tone="good">Met</Pill>}{x.adjusted && <span className="ml-1"><Pill tone="info">Adjusted</Pill></span>}</td>
+                    {isOwner && <td className={td + ' whitespace-nowrap'}>
+                      {x.earned !== null && (activeAppealKeys.has(x.parameter_id) ? <span className="text-[12px] text-muted">Appealed</span>
+                        : canAppeal && <button className="text-[12.5px] font-medium text-brand hover:underline" onClick={() => setAppealOpen(true, x.parameter_id)}>Appeal this</button>)}
+                    </td>}
                   </tr>
                 ))}
               </FragmentBlock>))}
               <tr className="font-semibold"><td className={td}>Task score</td><td className={td + ' text-right tnum'}>100</td><td className={td + ' text-right'}><ScoreBadge score={e.score} settings={s} /></td>
-                <td className={td}>{e.autofail ? <Pill tone="bad">Autofail — score 0</Pill> : null}{e.adjusted && <span className="ml-1 text-[12px] font-normal text-muted">original {fmtPct(e.original_score, 0)}{e.original_autofail && !e.autofail ? ' (autofail overturned)' : ''}</span>}</td></tr>
+                <td className={td}>{e.autofail ? <Pill tone="bad">Autofail — score 0</Pill> : null}{e.adjusted && <span className="ml-1 text-[12px] font-normal text-muted">original {fmtPct(e.original_score, 0)}{e.original_autofail && !e.autofail ? ' (autofail overturned)' : ''}</span>}</td>
+                {isOwner && <td className={td}>{e.autofail && canAppeal && !activeAppealKeys.has('AF') && <button className="text-[12.5px] font-medium text-brand hover:underline" onClick={() => setAppealOpen(true, 'AF')}>Appeal autofail</button>}</td>}</tr>
             </tbody>
           </Table>
         </Card>
@@ -131,29 +145,45 @@ export function EvaluationDetailPage() {
               <td className={td}>{a.reason}</td><td className={td}>{a.appeal_id ? <Link to={`/appeals/${a.appeal_id}`} className="text-brand hover:underline">Appeal</Link> : 'QA correction'}{a.approved_by_name ? ` · ${a.approved_by_name}` : ''}</td></tr>)}</tbody></Table>
         </Card>
       )}
-      {isOwner && <AppealForm open={appealOpen} onClose={() => setAppealOpen(false)} evaluation={e} deadline={deadline.data} onDone={() => bump()} />}
+      {isOwner && appealOpen && <AppealForm open onClose={() => setAppealOpen(false)} evaluation={e} deadline={deadline.data} preselect={preselect} onDone={() => bump()} />}
       {me!.role === 'super_admin' && <AdjustScoreModal open={adjustOpen} onClose={() => setAdjustOpen(false)} evaluation={e} onDone={() => bump()} />}
     </div>
   );
 }
 function FragmentBlock({ sec, children }: { sec: string; children: React.ReactNode }) {
-  return <>{sec && <tr><td colSpan={4} className="bg-sunken/40 px-3 py-1.5 text-[11.5px] font-semibold uppercase tracking-wide text-muted">{sec}</td></tr>}{children}</>;
+  return <>{sec && <tr><td colSpan={5} className="bg-sunken/40 px-3 py-1.5 text-[11.5px] font-semibold uppercase tracking-wide text-muted">{sec}</td></tr>}{children}</>;
 }
 
 // ------------------------------------------------------------------ appeal form
-export function AppealForm({ open, onClose, evaluation: e, deadline, onDone }: { open: boolean; onClose: () => void; evaluation: Evaluation; deadline: string | null; onDone: () => void }) {
+/**
+ * Raise a new appeal, or edit a draft (pass `draft`). Evidence is uploaded while the
+ * appeal is still a draft and only then submitted, so a failed upload never leaves a
+ * submitted appeal without its files.
+ */
+export function AppealForm({ open, onClose, evaluation: e, deadline, onDone, preselect, draft }: {
+  open: boolean; onClose: () => void; evaluation: Evaluation; deadline: string | null; onDone: () => void;
+  preselect?: string | null; draft?: { id: string; reference: string; reason: string; items: AppealItem[] };
+}) {
   const { me } = useApp();
+  const ref = useRef_();
   const nav = useNavigate();
   const toast = useToast();
-  const [picked, setPicked] = useState<Record<string, { on: boolean; requested: string }>>({});
-  const [reason, setReason] = useState('');
+  const [picked, setPicked] = useState<Record<string, { on: boolean; requested: string }>>(() => {
+    if (draft) return Object.fromEntries(draft.items.map((i) => [i.is_autofail ? 'AF' : i.parameter_id!, { on: true, requested: i.requested_score === null || i.is_autofail ? '' : String(i.requested_score) }]));
+    return preselect ? { [preselect]: { on: true, requested: '' } } : {};
+  });
+  const [reason, setReason] = useState(draft?.reason ?? '');
+  // parameters already under an open appeal on this task (the server enforces this too)
+  const others = useAsync(() => repo.listAppeals({ evaluationId: e.id }), [e.id]);
+  const blocked = new Set((others.data ?? []).filter((a) => a.status !== 'closed' && a.id !== draft?.id).flatMap((a) => a.disputed_keys ?? []));
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const options = useMemo(() => [
-    ...(e.autofail ? [{ key: 'AF', label: 'Autofail decision', max: 1, earned: 1 as number | null }] : []),
-    ...e.scores.filter((x) => x.earned !== null).map((x) => ({ key: x.parameter_id, label: x.parameter_name, max: x.max_score, earned: x.earned })),
-  ], [e]);
+    ...(e.autofail ? [{ key: 'AF', label: 'Autofail decision', max: 1, earned: 1 as number | null, remarks: null as string | null, criteria: null as string | null }] : []),
+    ...e.scores.filter((x) => x.earned !== null).map((x) => ({ key: x.parameter_id, label: x.parameter_name, max: x.max_score, earned: x.earned,
+      remarks: x.remarks, criteria: ref.parameters.find((p) => p.id === x.parameter_id)?.criteria ?? null })),
+  ], [e, ref.parameters]);
   const selected = options.filter((o) => picked[o.key]?.on);
   const submit = async (asDraft: boolean) => {
     setErr(null);
@@ -161,16 +191,30 @@ export function AppealForm({ open, onClose, evaluation: e, deadline, onDone }: {
     if (reason.trim().length < 20) return setErr(new Error('Please explain the reason in detail (at least 20 characters).'));
     for (const f of files) if (f.size > 10 * 1024 * 1024) return setErr(new Error(`${f.name} is larger than 10 MB.`));
     setBusy(true);
+    const items = selected.map((o) => o.key === 'AF' ? { is_autofail: true } : {
+      parameter_id: o.key, requested_score: picked[o.key].requested === '' ? null : Number(picked[o.key].requested) });
+    let id = draft?.id ?? null;
     try {
-      const id = await repo.submitAppeal(e.id, reason, selected.map((o) => o.key === 'AF' ? { is_autofail: true } : {
-        parameter_id: o.key, requested_score: picked[o.key].requested === '' ? null : Number(picked[o.key].requested) }), asDraft);
+      if (id) await repo.updateDraftAppeal(id, reason, items);
+      else id = await repo.submitAppeal(e.id, reason, items, true);
+    } catch (x) { setErr(x); setBusy(false); return; }
+    try {
       for (const f of files) await repo.uploadEvidence(id, f);
-      toast(asDraft ? 'Draft saved.' : 'Appeal submitted to your Team Lead.');
+    } catch (x) {
+      toast(`Your appeal was saved as a draft, but a file could not be uploaded (${x instanceof Error ? x.message : String(x)}). Open the draft to add the file and submit.`, 'bad');
+      setBusy(false); onDone(); onClose(); nav(`/appeals/${id}`); return;
+    }
+    try {
+      if (!asDraft) await repo.submitDraftAppeal(id);
+      toast(asDraft ? 'Draft saved. Submit it before the deadline.' : 'Appeal submitted to your Team Lead.');
       onDone(); onClose(); nav(`/appeals/${id}`);
-    } catch (x) { setErr(x); } finally { setBusy(false); }
+    } catch (x) {
+      setErr(new Error(`Saved as a draft but not submitted: ${x instanceof Error ? x.message : String(x)}`));
+      onDone();
+    } finally { setBusy(false); }
   };
   return (
-    <Modal open={open} onClose={onClose} title="Raise an appeal" wide footer={<>
+    <Modal open={open} onClose={onClose} title={draft ? `Edit draft ${draft.reference}` : 'Raise an appeal'} wide footer={<>
       <Button variant="secondary" onClick={onClose}>Cancel</Button>
       <Button variant="secondary" loading={busy} onClick={() => submit(true)}>Save as draft</Button>
       <Button loading={busy} onClick={() => submit(false)}>Submit to Team Lead</Button>
@@ -182,7 +226,9 @@ export function AppealForm({ open, onClose, evaluation: e, deadline, onDone }: {
           <div><span className="text-muted">Task link:</span> <a className="text-brand hover:underline" href={e.task_link} target="_blank" rel="noreferrer noopener">Open</a></div>
           <div><span className="text-muted">Audit date:</span> {fmtDate(e.audited_at)}</div><div><span className="text-muted">Audit week:</span> {e.period_short_label}</div>
           <div><span className="text-muted">Task type:</span> {e.task_type_name}</div><div><span className="text-muted">QA evaluator:</span> {e.evaluator_name ?? '—'}</div>
-          <div><span className="text-muted">Original score:</span> <strong>{fmtPct(e.score, 0)}</strong></div><div><span className="text-muted">Routed to:</span> {me!.lead_name ?? 'No Team Lead assigned'}</div>
+          <div><span className="text-muted">Original score:</span> <strong>{fmtPct(e.original_score, 0)}</strong>{e.adjusted && <span className="text-muted"> (current {fmtPct(e.score, 0)} after an earlier change)</span>}</div><div><span className="text-muted">Routed to:</span> {me!.lead_name ?? 'No Team Lead assigned'}</div>
+          <div><span className="text-muted">Appeal reference:</span> {draft ? <span className="font-mono text-[12px]">{draft.reference}</span> : <span className="text-muted">assigned automatically when saved</span>}</div>
+          <div><span className="text-muted">Submission date:</span> {fmtDate(new Date().toISOString())}</div>
           <div className="sm:col-span-2"><span className="text-muted">Appeal deadline:</span> <strong>{deadline ? fmtDateTime(deadline) : '—'}</strong></div>
         </div>
         {e.feedback && <div><div className="eyebrow mb-1">Original QA feedback</div><p className="rounded border border-line p-2.5">{e.feedback}</p></div>}
@@ -195,10 +241,16 @@ export function AppealForm({ open, onClose, evaluation: e, deadline, onDone }: {
               return (
                 <div key={o.key} className="flex flex-wrap items-center gap-3 px-3 py-2">
                   <label className="flex flex-1 items-center gap-2" htmlFor={`ap-${o.key}`}>
-                    <input id={`ap-${o.key}`} type="checkbox" checked={st.on} onChange={(x) => setPicked((p) => ({ ...p, [o.key]: { ...st, on: x.target.checked } }))} />
-                    <span className="font-medium">{o.label}</span>
+                    <input id={`ap-${o.key}`} type="checkbox" checked={st.on} disabled={blocked.has(o.key)} onChange={(x) => setPicked((p) => ({ ...p, [o.key]: { ...st, on: x.target.checked } }))} />
+                    <span className="font-medium">{o.label}</span>{blocked.has(o.key) && <span className="text-[12px] text-muted">· already under appeal</span>}
                     <span className="text-muted tnum">{o.key === 'AF' ? 'Autofail = Yes' : `${o.earned}/${o.max}`}</span>
                   </label>
+                  {st.on && (o.remarks || o.criteria) && (
+                    <div className="basis-full pl-6 text-[12px] text-muted">
+                      {o.remarks && <div><span className="eyebrow mr-1">QA remark</span>{o.remarks}</div>}
+                      {o.criteria && <div><span className="eyebrow mr-1">Scoring criteria</span>{o.criteria}</div>}
+                    </div>
+                  )}
                   {st.on && o.key !== 'AF' && (
                     <span className="flex items-center gap-1.5">
                       <label htmlFor={`ap-req-${o.key}`} className="text-[12px] text-muted">Proposed score (optional)</label>

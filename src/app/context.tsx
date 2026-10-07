@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { repo } from '../data';
+import { repo, isGoogle } from '../data';
 import type { Employee, Me, Parameter, Period, PortalSettings, TaskType, Team } from '../lib/types';
 
 interface RefData {
@@ -86,7 +86,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Session expiry on inactivity.
   const last = useRef(Date.now());
   useEffect(() => {
-    if (!me) return;
+    if (!me || isGoogle) return; // Google version: the Google session applies
     const touch = () => { last.current = Date.now(); };
     const evs = ['mousemove', 'keydown', 'click', 'touchstart', 'scroll'];
     evs.forEach((e) => window.addEventListener(e, touch, { passive: true }));

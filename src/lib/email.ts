@@ -4,9 +4,13 @@ import type { Period, PortalSettings } from './types';
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const mmdd = (d: string) => `${d.slice(5, 7)}/${d.slice(8, 10)}`;
 
+/** Link to a page of the portal. Google Apps Script web apps (…/exec) take the page as ?p=, other hosts use #/. */
+export function portalLink(portalUrl: string, path: string) {
+  const base = (portalUrl || '').replace(/\/+$/, '');
+  return /\/exec$|script\.google\.com/.test(base) ? `${base}?p=${encodeURIComponent(path)}` : `${base}/#${path}`;
+}
 export function reportLink(settings: PortalSettings, period: Period) {
-  const base = (settings.notifications.portal_url || '').replace(/\/+$/, '');
-  return `${base}/#/?mode=week&period=${period.id}`;
+  return portalLink(settings.notifications.portal_url, `/?mode=week&period=${period.id}`);
 }
 
 export function renderReportEmail(settings: PortalSettings, period: Period, camName: string) {

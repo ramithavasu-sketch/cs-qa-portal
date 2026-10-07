@@ -7,9 +7,25 @@ import type {
   ExtraAdjustmentInput, ImportBatch, ImportRejection, LeadRecommendation, Me, NotificationRow, Parameter, Period,
   PortalSettings, QaDecisionInput, Role, ScoreAdjustment, SubmitAppealItem, TaskType, Team, WeeklyEmailRow, TeamMappingRow, TeamMappingResult,
 } from '../lib/types';
-import { renderReportEmail } from '../lib/email';
-import { generateDemoSeed, DEMO_PASSWORD, type RawEvaluation } from '../demo/generate';
-import type { ImportRow } from '../../supabase/functions/_shared/mapper';
+import { renderReportEmail, portalLink } from '../lib/email';
+import { generateDemoSeed, referenceData, DEMO_PASSWORD, type RawEvaluation } from '../demo/generate';
+import { mapAuditRows, rowsToRecords, type ImportRow } from '../../supabase/functions/_shared/mapper';
+import type { DataSource } from '../../supabase/functions/_shared/rubric';
+import type { SheetSyncResult } from '../lib/types';
+
+/** Hooks the Google Apps Script server provides (Drive files, sheet reading, portal URL). Not used in the browser. */
+export interface ServerHooks {
+  portalUrl: string;
+  readSheet(src: DataSource): { title: string; values: string[][] };
+  putFile(name: string, mime: string, base64: string): string;
+  getFile(id: string): string;
+  /** Shows what a long action is doing (read by the page while it waits). */
+  progress?(msg: string): void;
+}
+/** An email the server sends after the change has been saved. */
+export interface OutMail { id: string; to: string; cc: string | null; subject: string; html: string; reply_to: string | null; sender_name: string; weekly?: { period_id: string; cam_id: string } }
+export interface SetupFile { kind: 'csqa-setup'; version: 1; exported_at: string; employees: Employee[]; teams: Team[]; settings: PortalSettings;
+  taskTypes: TaskType[]; parameters: Parameter[]; aliases: Record<string, string>; historical: string[] }
 
 interface Grant { id: string; evaluation_id: string; parameter_id: string | null; is_autofail: boolean; used_at: string | null }
 interface RawAppeal {
@@ -18,14 +34,14 @@ interface RawAppeal {
   submitted_at: string | null; forwarded_at: string | null; decided_at: string | null; decided_by: string | null;
   resolution_note: string | null; status_changed_at: string; created_at: string;
 }
-interface EvidenceBlob extends Evidence { data_url: string }
+interface EvidenceBlob extends Evidence { data_url: string; drive_id?: string }
 interface State {
   version: number; createdAt: string;
   employees: Employee[]; teams: Team[]; taskTypes: TaskType[]; parameters: Parameter[]; settings: PortalSettings; periods: Period[];
   evaluations: RawEvaluation[]; adjustments: ScoreAdjustment[]; appeals: RawAppeal[]; items: AppealItem[]; events: AppealEvent[];
   evidence: EvidenceBlob[]; grants: Grant[]; notifications: (NotificationRow & { recipient_id: string })[]; audit: AuditLog[];
   batches: ImportBatch[]; rejections: (ImportRejection & { batch_id: string })[]; refSeq: number; auditSeq: number; passwords: Record<string, string>;
-  weeklyEmails: { period_id: string; cam_id: string; to: string; cc: string | null; subject: string; status: 'sent'; queued_at: string }[];
+  weeklyEmails: { period_id: string; cam_id: string; to: string; cc: string | null; subject: string; status: 'queued' | 'sent' | 'failed'; queued_at: string; sent_at?: string | null; error?: string | null; mail_id?: string }[];
   aliases?: Record<string, string>; historical?: string[]; mustChange?: Record<string, boolean>;
 }
 
@@ -36,10 +52,12 @@ const FINAL: AppealStatus[] = ['approved', 'partially_approved', 'rejected', 'cl
 const ALLOWED_MIME = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf', 'text/plain',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
 
-const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'id-' + Math.random().toString(36).slice(2) + Date.now());
+const uid = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'id-' + Math.random().toString(36).slice(2) + Date.now().toString(36));
 const nowIso = () => new Date().toISOString();
-const delay = (ms = 60) => new Promise((r) => setTimeout(r, ms));
-const clone = <T,>(x: T): T => structuredClone(x);
+// On the Google server there is nothing to wait for (and no timers), so delays resolve at once.
+const delay = (ms = 60) => (typeof window === 'undefined' ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)));
+const clone = <T,>(x: T): T => (typeof structuredClone === 'function' ? structuredClone(x) : JSON.parse(JSON.stringify(x)));
+const esc = (t: string) => t.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 class AuthError extends Error {}
 
 function addBusinessDays(from: Date, days: number) {
@@ -77,8 +95,12 @@ async function sha256(text: string) {
 }
 
 export class DemoRepo implements Repo {
-  readonly mode: 'demo' | 'local';
+  readonly mode: 'demo' | 'local' | 'google';
   private s!: State;
+  /** Google server only: set by the server entry for each request. */
+  server: ServerHooks | null = null;
+  serverDirty = false;
+  serverOutbox: OutMail[] = [];
   private meId: string | null = null;
   private listeners = new Set<(e: 'SIGNED_IN' | 'SIGNED_OUT' | 'PASSWORD_RECOVERY') => void>();
   readonly ready: Promise<void>;
@@ -90,15 +112,22 @@ export class DemoRepo implements Repo {
    *                created on first run, real audits loaded from the Google Sheet CSV,
    *                everything kept in IndexedDB in this browser on this computer only.
    */
-  constructor(mode: 'demo' | 'local' = 'demo') {
+  constructor(mode: 'demo' | 'local' | 'google' = 'demo', serverState?: unknown) {
     this.mode = mode;
+    if (mode === 'google') {
+      // Runs inside Google Apps Script: state is loaded from Drive by the server for each request.
+      this.s = (serverState as State | null) ?? this.emptyState();
+      this.upgradeState();
+      this.ready = Promise.resolve();
+      return;
+    }
     if (mode === 'demo') { this.load(); this.ready = Promise.resolve(); }
     else this.ready = this.loadLocal();
     try { this.meId = sessionStorage.getItem(SESSION_KEY + (mode === 'local' ? '-local' : '')); } catch { this.meId = null; }
   }
 
   private emptyState(): State {
-    const seed = generateDemoSeed();
+    const seed = referenceData();
     return {
       version: 4, createdAt: nowIso(), weeklyEmails: [], employees: [], teams: [], taskTypes: seed.taskTypes, parameters: seed.parameters,
       settings: seed.settings, periods: [], evaluations: [], adjustments: [], appeals: [], items: [], events: [],
@@ -111,11 +140,11 @@ export class DemoRepo implements Repo {
   }
   /** Data saved by an older version of the portal: add settings, parameters and fields introduced since. */
   private upgradeState() {
-    const seed = generateDemoSeed();
+    const seed = referenceData();
     const s = this.s as Partial<State> & State;
     s.settings = { ...seed.settings, ...(s.settings ?? {}) } as PortalSettings;
     const ds = s.settings.data_sources as PortalSettings['data_sources'] | undefined;
-    if (!ds || !Array.isArray(ds.sources) || !ds.sources.length) s.settings.data_sources = seed.settings.data_sources;
+    if (!ds || !Array.isArray(ds.sources)) s.settings.data_sources = seed.settings.data_sources;
     s.taskTypes = [...(s.taskTypes ?? []), ...seed.taskTypes.filter((t) => !(s.taskTypes ?? []).some((x) => x.code === t.code))];
     s.parameters = [...(s.parameters ?? []), ...seed.parameters.filter((p) => !(s.parameters ?? []).some((x) => x.id === p.id))];
     for (const k of ['weeklyEmails', 'employees', 'teams', 'periods', 'evaluations', 'adjustments', 'appeals', 'items', 'events', 'evidence', 'grants', 'notifications', 'audit', 'batches', 'rejections'] as const)
@@ -151,6 +180,7 @@ export class DemoRepo implements Repo {
     this.reset();
   }
   private save() {
+    if (this.mode === 'google') { this.serverDirty = true; return; }
     if (this.mode === 'local') {
       if (this.saveTimer) clearTimeout(this.saveTimer);
       this.saveTimer = setTimeout(() => { idbPut('state', this.s).catch((e) => console.error('Could not save local data', e)); }, 150);
@@ -336,6 +366,26 @@ export class DemoRepo implements Repo {
     if (!emp || emp.status !== 'active') return;
     if (this.s.settings.notifications.in_app?.[type] === false) return;
     this.s.notifications.unshift({ id: uid(), recipient_id: recipient, type, title, message, link, appeal_id: appealId, read_at: null, created_at: nowIso() });
+    // Google version: also email it — only the title, a one-line status and a link (never scores, feedback or other CAMs' data).
+    // "Report published" is covered by the weekly report email, so it is not emailed twice.
+    const n = this.s.settings.notifications;
+    if (this.mode === 'google' && n.email_enabled && n.email?.[type] !== false && type !== 'report_published' && !emp.email.endsWith('.invalid')) {
+      const url = this.linkFor(link);
+      this.serverOutbox.push({ id: uid(), to: emp.email, cc: null, subject: `CS QA Portal: ${title}`, reply_to: this.s.settings.report_email.reply_to || null,
+        sender_name: this.s.settings.report_email.sender_name || 'CS QA Portal',
+        html: `<p>Hi ${esc(emp.full_name.split(' ')[0])},</p><p>${esc(message)}</p><p><a href="${esc(url)}">Open in the CS QA Portal</a></p><p style="color:#666;font-size:12px">You're receiving this because of your role in the CS QA appeal process. Details are only available after signing in with your company Google account.</p>` });
+    }
+  }
+  /** Full portal link for an in-app path (Google version: the web app URL with ?p=<path>). */
+  private linkFor(path: string | null) {
+    const base = this.server?.portalUrl || this.s.settings.notifications.portal_url || '';
+    return path ? portalLink(base, path) : base;
+  }
+  /** Mirrors public._appeal_msg: reference, task id and current status, never scores or feedback. */
+  private appealMsg(a: RawAppeal, leadIn: string) {
+    const e = this.s.evaluations.find((x) => x.id === a.evaluation_id);
+    const st = a.status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    return `${leadIn} Appeal: ${a.reference} · Task: ${e?.task_id ?? '—'} · Status: ${st}.`;
   }
   private notifySupers(type: string, title: string, message: string, link: string, appealId: string) {
     this.s.employees.filter((e) => e.role === 'super_admin' && e.status === 'active').forEach((e) => this.notify(e.id, type, title, message, link, appealId));
@@ -442,7 +492,8 @@ export class DemoRepo implements Repo {
   private toMe(e: Employee): Me {
     const team = e.team_id ? this.s.teams.find((t) => t.id === e.team_id) : undefined;
     const lead = team?.lead_id ? this.s.employees.find((x) => x.id === team.lead_id) : undefined;
-    return { ...clone(e), team_name: team?.name ?? null, lead_name: lead?.full_name ?? null, must_change_password: !!this.s.mustChange?.[e.email] };
+    const led = e.role !== 'user' && !team ? this.s.teams.filter((t) => t.lead_id === e.id).map((t) => t.name).join(', ') : '';
+    return { ...clone(e), team_name: team?.name ?? (led || null), lead_name: lead?.full_name ?? null, must_change_password: !!this.s.mustChange?.[e.email] };
   }
   async signIn(email: string, password: string) {
     await this.ready;
@@ -527,7 +578,7 @@ export class DemoRepo implements Repo {
     return { ...clone(a), task_id: e.task_id, task_link: e.task_link, task_type: e.task_type, period_id: e.period_id, period_label: p.label,
       period_short_label: p.short_label, audited_at: e.audited_at, evaluator_name: e.evaluator_name, original_score: e.original_score,
       cam_name: cam.full_name, cam_email: cam.email, lead_name: lead?.full_name ?? null, days_in_status: Math.round(days * 10) / 10, overdue,
-      item_count: items.length,
+      item_count: items.length, disputed_keys: items.map((i) => (i.is_autofail ? 'AF' : i.parameter_id!)),
       parameters_label: items.map((i) => (i.is_autofail ? 'Autofail' : this.s.parameters.find((p2) => p2.id === i.parameter_id)?.name ?? '?')).join(', ') };
   }
   async listAppeals(filter: { statuses?: AppealStatus[]; camId?: string; leadId?: string; evaluationId?: string } = {}) {
@@ -564,18 +615,37 @@ export class DemoRepo implements Repo {
     const dl = this.deadline(ev);
     if (!dl || Date.now() > dl.getTime()) throw new Error(`The appeal window for this evaluation closed on ${dl?.toDateString() ?? '—'}`);
     this.require(!!reason && reason.trim().length >= 20, 'Please give a detailed reason for the appeal (at least 20 characters)');
-    this.require(items.length > 0, 'Select at least one disputed parameter');
     const team = me.team_id ? this.s.teams.find((t) => t.id === me.team_id) : undefined;
     this.require(!!team?.lead_id, 'No Team Lead is assigned to your team. Please contact the QA team.');
-    const limit = this.s.settings.appeal_window.max_appeals_per_cam_per_period;
-    if (limit !== null && limit !== undefined && !asDraft) {
-      const count = this.s.appeals.filter((a) => a.cam_id === me.id && !['draft', 'closed'].includes(a.status)
-        && this.s.evaluations.find((x) => x.id === a.evaluation_id)?.period_id === ev.period_id).length;
-      this.require(count < limit, `You have reached the maximum of ${limit} appeal(s) for this audit week`);
+    if (!asDraft) this.checkAppealLimit(me.id, ev.period_id, null);
+    const appealId = uid();
+    const prepared = this.prepareItems(appealId, ev, items);
+    const ref = `APL-${new Date().getFullYear()}-${String(this.s.refSeq++).padStart(5, '0')}`;
+    const status: AppealStatus = asDraft ? 'draft' : 'pending_lead_review';
+    this.s.appeals.push({ id: appealId, reference: ref, evaluation_id: ev.id, cam_id: me.id, lead_id: team!.lead_id, status, reason: reason.trim(),
+      info_requested_from: null, info_due_at: null, lead_recommendation: null, submitted_at: asDraft ? null : nowIso(), forwarded_at: null,
+      decided_at: null, decided_by: null, resolution_note: null, status_changed_at: nowIso(), created_at: nowIso() });
+    this.s.items.push(...prepared);
+    this.event(appealId, asDraft ? 'draft_saved' : 'submitted', null, 'shared', null, status);
+    if (!asDraft) {
+      const a = this.findAppeal(appealId);
+      this.notify(team!.lead_id, 'appeal_submitted', `New appeal ${ref} awaiting your review`, this.appealMsg(a, 'A CAM in your team submitted an appeal for your review.'), `/appeals/${appealId}`, appealId);
+      this.notify(me.id, 'appeal_submitted', `Appeal ${ref} submitted`, this.appealMsg(a, 'Your appeal was submitted and sent to your Team Lead.'), `/appeals/${appealId}`, appealId);
     }
+    return appealId;
+  }
+  private checkAppealLimit(camId: string, periodId: string, exclude: string | null) {
+    const limit = this.s.settings.appeal_window.max_appeals_per_cam_per_period;
+    if (limit === null || limit === undefined) return;
+    const count = this.s.appeals.filter((a) => a.cam_id === camId && a.id !== exclude && !['draft', 'closed'].includes(a.status)
+      && this.s.evaluations.find((x) => x.id === a.evaluation_id)?.period_id === periodId).length;
+    this.require(count < limit, `You have reached the maximum of ${limit} appeal(s) for this audit week`);
+  }
+  /** Mirrors public._insert_appeal_items (validation + duplicate protection). */
+  private prepareItems(appealId: string, ev: RawEvaluation, items: SubmitAppealItem[]): AppealItem[] {
+    this.require(items.length > 0, 'Select at least one disputed parameter');
     const seen = new Set<string>();
     const prepared: AppealItem[] = [];
-    const appealId = uid();
     for (const it of items) {
       const isAf = !!it.is_autofail;
       const key = isAf ? 'AF' : it.parameter_id ?? '';
@@ -593,7 +663,7 @@ export class DemoRepo implements Repo {
       }
       const clash = this.s.items.some((ai) => {
         const a = this.s.appeals.find((x) => x.id === ai.appeal_id)!;
-        return a.evaluation_id === ev.id && (a.status !== 'closed' || !!a.decided_at) && ai.is_autofail === isAf && (ai.parameter_id ?? null) === (isAf ? null : it.parameter_id ?? null);
+        return a.id !== appealId && a.evaluation_id === ev.id && a.status !== 'closed' && ai.is_autofail === isAf && (ai.parameter_id ?? null) === (isAf ? null : it.parameter_id ?? null);
       });
       if (clash) {
         const g = this.s.grants.find((x) => x.evaluation_id === ev.id && !x.used_at && x.is_autofail === isAf && (x.parameter_id ?? null) === (isAf ? null : it.parameter_id ?? null));
@@ -603,15 +673,7 @@ export class DemoRepo implements Repo {
       prepared.push({ id: uid(), appeal_id: appealId, parameter_id: isAf ? null : it.parameter_id!, is_autofail: isAf, original_score: orig,
         requested_score: isAf ? 0 : it.requested_score ?? null, decision: 'pending', revised_score: null, decision_reason: null, decided_by: null, decided_at: null });
     }
-    const ref = `APL-${new Date().getFullYear()}-${String(this.s.refSeq++).padStart(5, '0')}`;
-    const status: AppealStatus = asDraft ? 'draft' : 'pending_lead_review';
-    this.s.appeals.push({ id: appealId, reference: ref, evaluation_id: ev.id, cam_id: me.id, lead_id: team!.lead_id, status, reason: reason.trim(),
-      info_requested_from: null, info_due_at: null, lead_recommendation: null, submitted_at: asDraft ? null : nowIso(), forwarded_at: null,
-      decided_at: null, decided_by: null, resolution_note: null, status_changed_at: nowIso(), created_at: nowIso() });
-    this.s.items.push(...prepared);
-    this.event(appealId, asDraft ? 'draft_saved' : 'submitted', null, 'shared', null, status);
-    if (!asDraft) this.notify(team!.lead_id, 'appeal_submitted', `New appeal ${ref} awaiting your review`, `Appeal ${ref} for task ${ev.task_id} is pending Lead review.`, `/appeals/${appealId}`, appealId);
-    return appealId;
+    return prepared;
   }
   async submitAppeal(evaluationId: string, reason: string, items: SubmitAppealItem[], asDraft = false) {
     await delay(); const id = this.submitAppealSync(evaluationId, reason, items, asDraft); this.save(); return id;
@@ -626,10 +688,37 @@ export class DemoRepo implements Repo {
     this.require(!!dl && Date.now() <= dl.getTime(), 'The appeal window has closed');
     const team = me.team_id ? this.s.teams.find((t) => t.id === me.team_id) : undefined;
     this.require(!!team?.lead_id, 'No Team Lead is assigned to your team. Please contact the QA team.');
+    this.checkAppealLimit(me.id, ev.period_id, a.id);
     a.lead_id = team!.lead_id; a.submitted_at = nowIso();
     this.setStatus(a, 'pending_lead_review');
     this.event(a.id, 'submitted', null, 'shared', 'draft', 'pending_lead_review');
-    this.notify(a.lead_id, 'appeal_submitted', `New appeal ${a.reference} awaiting your review`, `Appeal ${a.reference} is pending Lead review.`, `/appeals/${a.id}`, a.id);
+    this.notify(a.lead_id, 'appeal_submitted', `New appeal ${a.reference} awaiting your review`, this.appealMsg(a, 'A CAM in your team submitted an appeal for your review.'), `/appeals/${a.id}`, a.id);
+    this.notify(me.id, 'appeal_submitted', `Appeal ${a.reference} submitted`, this.appealMsg(a, 'Your appeal was submitted and sent to your Team Lead.'), `/appeals/${a.id}`, a.id);
+    this.save();
+  }
+  async updateDraftAppeal(appealId: string, reason: string, items: SubmitAppealItem[]) {
+    await delay();
+    const me = this.me(); const a = this.findAppeal(appealId);
+    this.require(a.cam_id === me.id, 'Not authorised');
+    this.require(a.status === 'draft', 'Only drafts can be edited');
+    this.require(!!reason && reason.trim().length >= 20, 'Please give a detailed reason for the appeal (at least 20 characters)');
+    const ev = this.s.evaluations.find((x) => x.id === a.evaluation_id)!;
+    const prepared = this.prepareItems(a.id, ev, items);
+    a.reason = reason.trim();
+    this.s.items = this.s.items.filter((i) => i.appeal_id !== a.id).concat(prepared);
+    this.event(a.id, 'draft_saved', null, 'shared', null, null);
+    this.save();
+  }
+  async shareAppealComment(eventId: string) {
+    await delay();
+    const me = this.me();
+    const ev = this.s.events.find((x) => x.id === eventId);
+    this.require(!!ev, 'Not authorised');
+    const a = this.findAppeal(ev!.appeal_id);
+    this.require(this.canViewAppeal(a) && me.role !== 'user' && (ev!.actor_id === me.id || me.role === 'super_admin'), 'Only the author or QA can share this comment');
+    this.require(ev!.visibility === 'internal', 'This comment is already visible to the CAM');
+    ev!.visibility = 'shared';
+    this.event(a.id, 'comment_shared', 'An internal comment was shared with the CAM.', 'internal', null, null);
     this.save();
   }
   private leadReviewSync(appealId: string, rec: LeadRecommendation, comment: string, internalNote?: string) {
@@ -642,13 +731,13 @@ export class DemoRepo implements Repo {
       a.info_requested_from = 'cam'; a.info_due_at = addBusinessDays(new Date(), this.s.settings.sla.clarification_days).toISOString();
       this.setStatus(a, 'returned_to_cam');
       this.event(a.id, 'lead_returned', comment, 'shared', 'pending_lead_review', 'returned_to_cam', rec);
-      this.notify(a.cam_id, 'appeal_returned', `Appeal ${a.reference} returned for clarification`, `Your Team Lead has requested more information on appeal ${a.reference}.`, `/appeals/${a.id}`, a.id);
+      this.notify(a.cam_id, 'appeal_returned', `Appeal ${a.reference} returned for clarification`, this.appealMsg(a, `Your Team Lead has requested more information. Please respond by ${new Date(a.info_due_at!).toDateString()}.`), `/appeals/${a.id}`, a.id);
     } else {
       a.lead_recommendation = rec; a.forwarded_at = nowIso(); a.info_requested_from = null; a.info_due_at = null;
       this.setStatus(a, 'pending_qa_review');
       this.event(a.id, 'lead_forwarded', comment, 'shared', 'pending_lead_review', 'pending_qa_review', rec);
-      this.notifySupers('appeal_forwarded', `Appeal ${a.reference} forwarded to QA`, `Appeal ${a.reference} has been reviewed by the Team Lead and is pending QA review.`, `/appeals/${a.id}`, a.id);
-      this.notify(a.cam_id, 'appeal_forwarded', `Appeal ${a.reference} forwarded to QA`, `Your appeal ${a.reference} has been reviewed by your Team Lead and forwarded to QA.`, `/appeals/${a.id}`, a.id);
+      this.notifySupers('appeal_forwarded', `Appeal ${a.reference} forwarded to QA`, this.appealMsg(a, 'The Team Lead has reviewed this appeal and forwarded it to QA.'), `/appeals/${a.id}`, a.id);
+      this.notify(a.cam_id, 'appeal_forwarded', `Appeal ${a.reference} forwarded to QA`, this.appealMsg(a, 'Your Team Lead has reviewed your appeal and forwarded it to QA.'), `/appeals/${a.id}`, a.id);
     }
   }
   async leadReviewAppeal(appealId: string, rec: LeadRecommendation, comment: string, internalNote?: string) {
@@ -663,7 +752,7 @@ export class DemoRepo implements Repo {
       a.info_requested_from = null; a.info_due_at = null;
       this.setStatus(a, 'pending_lead_review');
       this.event(a.id, 'cam_responded', response, 'shared', 'returned_to_cam', 'pending_lead_review');
-      this.notify(a.lead_id, 'appeal_submitted', `CAM responded on appeal ${a.reference}`, `The CAM has provided the requested information for appeal ${a.reference}.`, `/appeals/${a.id}`, a.id);
+      this.notify(a.lead_id, 'appeal_submitted', `CAM responded on appeal ${a.reference}`, this.appealMsg(a, 'The CAM has provided the requested information.'), `/appeals/${a.id}`, a.id);
     } else if (a.status === 'pending_additional_info') {
       const okCam = a.info_requested_from === 'cam' && a.cam_id === me.id;
       const okLead = a.info_requested_from === 'lead' && me.role === 'admin' && (a.lead_id === me.id || this.isLeadOf(a.cam_id));
@@ -671,7 +760,7 @@ export class DemoRepo implements Repo {
       a.info_requested_from = null; a.info_due_at = null;
       this.setStatus(a, 'pending_qa_review');
       this.event(a.id, me.id === a.cam_id ? 'cam_responded' : 'lead_responded', response, 'shared', 'pending_additional_info', 'pending_qa_review');
-      this.notifySupers('appeal_forwarded', `Response received on appeal ${a.reference}`, `Requested information has been provided for appeal ${a.reference}.`, `/appeals/${a.id}`, a.id);
+      this.notifySupers('appeal_forwarded', `Response received on appeal ${a.reference}`, this.appealMsg(a, 'The requested information has been provided.'), `/appeals/${a.id}`, a.id);
     } else throw new Error('No information has been requested on this appeal');
     this.save();
   }
@@ -692,7 +781,7 @@ export class DemoRepo implements Repo {
     a.info_requested_from = from; a.info_due_at = addBusinessDays(new Date(), this.s.settings.sla.clarification_days).toISOString();
     this.setStatus(a, 'pending_additional_info');
     this.event(a.id, 'qa_requested_info', comment, 'shared', 'pending_qa_review', 'pending_additional_info');
-    this.notify(from === 'cam' ? a.cam_id : a.lead_id, 'appeal_info_requested', `QA requested information on appeal ${a.reference}`, `QA needs additional information to decide appeal ${a.reference}.`, `/appeals/${a.id}`, a.id);
+    this.notify(from === 'cam' ? a.cam_id : a.lead_id, 'appeal_info_requested', `QA requested information on appeal ${a.reference}`, this.appealMsg(a, `QA needs additional information to decide this appeal. Please respond by ${new Date(a.info_due_at!).toDateString()}.`), `/appeals/${a.id}`, a.id);
   }
   async qaRequestInfo(appealId: string, from: 'cam' | 'lead', comment: string) { await delay(); this.qaRequestInfoSync(appealId, from, comment); this.save(); }
   private qaDecideSync(appealId: string, decisions: QaDecisionInput[], resolution: string, extra: ExtraAdjustmentInput[] = []): AppealStatus {
@@ -708,6 +797,7 @@ export class DemoRepo implements Repo {
       const it = items.find((i) => i.id === d.item_id);
       this.require(!!it, 'Decision refers to an item that is not part of this appeal');
       this.require(d.decision === 'approved' || d.decision === 'rejected', 'Decision must be approved or rejected');
+      if (d.decision === 'approved') this.require((d.reason ?? '').trim().length >= 5, 'A reason for the score adjustment is required for every approved parameter');
       if (d.decision === 'approved' && !it!.is_autofail) {
         const max = this.paramMax(ev.id, it!.parameter_id!);
         this.require(d.revised_score !== null && d.revised_score !== undefined && d.revised_score >= 0 && d.revised_score <= max, `Approved items need a revised score between 0 and ${max}`);
@@ -754,10 +844,9 @@ export class DemoRepo implements Repo {
     a.decided_at = nowIso(); a.decided_by = me.id; a.resolution_note = resolution.trim(); a.info_requested_from = null; a.info_due_at = null;
     this.setStatus(a, final);
     this.event(a.id, 'qa_decided', resolution, 'shared', 'pending_qa_review', final);
-    const label = final.replace('_', ' ');
-    this.notify(a.cam_id, 'appeal_decided', `Decision on appeal ${a.reference}`, `QA has made a final decision on appeal ${a.reference} (${label}).`, `/appeals/${a.id}`, a.id);
-    this.notify(a.lead_id, 'appeal_decided', `Decision on appeal ${a.reference}`, `QA has made a final decision on appeal ${a.reference} (${label}).`, `/appeals/${a.id}`, a.id);
-    if (approved > 0) this.notify(a.cam_id, 'score_changed', `Score updated for task ${ev.task_id.slice(0, 8)}`, `A finalized score was changed following appeal ${a.reference}.`, `/evaluations/${ev.id}`, a.id);
+    this.notify(a.cam_id, 'appeal_decided', `Decision on appeal ${a.reference}`, this.appealMsg(a, 'QA has made a final decision on your appeal.'), `/appeals/${a.id}`, a.id);
+    this.notify(a.lead_id, 'appeal_decided', `Decision on appeal ${a.reference}`, this.appealMsg(a, 'QA has made a final decision on an appeal from your team.'), `/appeals/${a.id}`, a.id);
+    if (approved > 0) this.notify(a.cam_id, 'score_changed', `Score updated for task ${ev.task_id.slice(0, 8)}`, this.appealMsg(a, 'A finalized score was changed following this appeal.'), `/evaluations/${ev.id}`, a.id);
     return final;
   }
   async qaDecideAppeal(appealId: string, decisions: QaDecisionInput[], resolution: string, extra: ExtraAdjustmentInput[] = []) {
@@ -771,11 +860,12 @@ export class DemoRepo implements Repo {
     this.require(!(a.status === 'closed' && !a.forwarded_at), 'This appeal was withdrawn before Lead review and cannot be reopened by QA');
     this.require(!!reason && reason.trim().length >= 10, 'A reason is required to reopen');
     const from = a.status;
-    this.s.items.filter((i) => i.appeal_id === a.id).forEach((i) => { i.decision = 'pending'; });
+    this.s.items.filter((i) => i.appeal_id === a.id).forEach((i) => { i.decision = 'pending'; i.decided_by = null; i.decided_at = null; });
+    a.decided_at = null; a.decided_by = null; a.resolution_note = null;
     this.setStatus(a, 'pending_qa_review');
     this.event(a.id, 'qa_reopened', reason, 'shared', from, 'pending_qa_review');
-    this.notify(a.cam_id, 'appeal_reopened', `Appeal ${a.reference} reopened`, `QA has reopened appeal ${a.reference} for further review.`, `/appeals/${a.id}`, a.id);
-    this.notify(a.lead_id, 'appeal_reopened', `Appeal ${a.reference} reopened`, `QA has reopened appeal ${a.reference} for further review.`, `/appeals/${a.id}`, a.id);
+    this.notify(a.cam_id, 'appeal_reopened', `Appeal ${a.reference} reopened`, this.appealMsg(a, 'QA has reopened your appeal for further review.'), `/appeals/${a.id}`, a.id);
+    this.notify(a.lead_id, 'appeal_reopened', `Appeal ${a.reference} reopened`, this.appealMsg(a, 'QA has reopened an appeal from your team for further review.'), `/appeals/${a.id}`, a.id);
     this.save();
   }
   async closeAppeal(appealId: string, reason: string) {
@@ -788,7 +878,8 @@ export class DemoRepo implements Repo {
     const from = a.status;
     this.setStatus(a, 'closed');
     this.event(a.id, 'closed', reason, 'shared', from, 'closed');
-    if (me.id !== a.cam_id) this.notify(a.cam_id, 'appeal_decided', `Appeal ${a.reference} closed`, `Appeal ${a.reference} has been closed.`, `/appeals/${a.id}`, a.id);
+    if (me.id !== a.cam_id) this.notify(a.cam_id, 'appeal_decided', `Appeal ${a.reference} closed`, this.appealMsg(a, 'Your appeal has been closed by QA.'), `/appeals/${a.id}`, a.id);
+    else if (from !== 'draft') this.notify(a.lead_id, 'appeal_decided', `Appeal ${a.reference} withdrawn`, this.appealMsg(a, 'The CAM withdrew this appeal.'), `/appeals/${a.id}`, a.id);
     this.save();
   }
   async grantResubmission(evaluationId: string, parameterId: string | null, isAutofail: boolean, reason: string) {
@@ -801,23 +892,40 @@ export class DemoRepo implements Repo {
     this.log('insert', 'appeal_resubmission_grants', g.id, null, { ...g, reason });
     this.save();
   }
-  async uploadEvidence(appealId: string, file: File) {
+  private checkEvidence(appealId: string, f: { name: string; type: string; size: number }, limitMb: number) {
     const a = this.findAppeal(appealId);
     this.require(this.canViewAppeal(a), 'Not authorised');
     this.require(!FINAL.includes(a.status), 'Evidence can only be added while the appeal is open');
-    this.require(ALLOWED_MIME.includes(file.type), `File type ${file.type || 'unknown'} is not allowed`);
-    this.require(file.size > 0 && file.size <= 10 * 1024 * 1024, 'Files must be 10 MB or smaller');
-    this.require(file.size <= 1.5 * 1024 * 1024, 'Demo mode stores files in your browser: please use files under 1.5 MB');
-    const data_url = await new Promise<string>((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = () => rej(fr.error); fr.readAsDataURL(file); });
+    this.require(ALLOWED_MIME.includes(f.type), `File type ${f.type || 'unknown'} is not allowed`);
+    this.require(f.size > 0 && f.size <= 10 * 1024 * 1024, 'Files must be 10 MB or smaller');
+    this.require(f.size <= limitMb * 1024 * 1024, this.mode === 'google' ? `Files must be ${limitMb} MB or smaller` : 'Demo mode stores files in your browser: please use files under 1.5 MB');
+    return a;
+  }
+  private addEvidence(a: RawAppeal, f: { name: string; type: string; size: number }, data_url: string, drive_id?: string) {
     const me = this.me();
-    this.s.evidence.push({ id: uid(), appeal_id: a.id, storage_path: `${a.id}/${uid()}-${file.name}`, file_name: file.name, mime_type: file.type, size_bytes: file.size, uploaded_by: me.id, created_at: nowIso(), data_url });
-    this.event(a.id, 'evidence_added', `Attached ${file.name}`, 'shared', null, null);
+    const name = String(f.name).replace(/[\\/]/g, '_').slice(0, 180);
+    this.s.evidence.push({ id: uid(), appeal_id: a.id, storage_path: `${a.id}/${uid()}-${name}`, file_name: name, mime_type: f.type, size_bytes: f.size, uploaded_by: me.id, created_at: nowIso(), data_url, drive_id });
+    this.event(a.id, 'evidence_added', `Attached ${name}`, 'shared', null, null);
     this.save();
+  }
+  async uploadEvidence(appealId: string, file: File) {
+    const a = this.checkEvidence(appealId, file, 1.5);
+    const data_url = await new Promise<string>((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = () => rej(fr.error); fr.readAsDataURL(file); });
+    this.addEvidence(a, file, data_url);
+  }
+  /** Google version: the browser sends the file as base64; it is stored as a private file in the QA owner's Drive. */
+  async uploadEvidenceData(appealId: string, f: { name: string; type: string; size: number; base64: string }) {
+    this.require(this.mode === 'google' && !!this.server, 'Not available');
+    this.require(typeof f?.base64 === 'string' && Math.floor(f.base64.length * 0.75) - 2 <= f.size + 2, 'File data does not match its size');
+    const a = this.checkEvidence(appealId, f, 5);
+    const id = this.server!.putFile(`${a.reference} - ${f.name}`, f.type, f.base64);
+    this.addEvidence(a, f, '', id);
   }
   async evidenceUrl(storagePath: string) {
     const ev = this.s.evidence.find((x) => x.storage_path === storagePath);
     const a = ev ? this.s.appeals.find((x) => x.id === ev.appeal_id) : undefined;
     this.require(!!ev && !!a && this.canViewAppeal(a!), 'Not authorised');
+    if (ev!.drive_id) return `data:${ev!.mime_type};base64,${this.server!.getFile(ev!.drive_id)}`;
     return ev!.data_url;
   }
 
@@ -857,7 +965,10 @@ export class DemoRepo implements Repo {
     this.log('update', 'reporting_periods', p.id, prev, clone(p));
     if (becamePublished) {
       const cams = new Set(this.s.evaluations.filter((e) => e.period_id === p.id).map((e) => e.cam_id));
-      cams.forEach((c) => this.notify(c, 'report_published', `Your QA report for ${p.short_label} is available`, `Your weekly CS QA report for ${p.label} has been published.`, `/dashboard?period=${p.id}`, null));
+      cams.forEach((c) => this.notify(c, 'report_published', `Your QA report for ${p.short_label} is available`, `Your weekly CS QA report for ${p.label} has been published.`, `/?mode=week&period=${p.id}`, null));
+      if (this.mode === 'google' && this.s.settings.report_email.send_on_publish) {
+        try { await this.sendWeeklyEmails(p.id, null, false); } catch (e) { this.log('weekly_emails_failed', 'reporting_periods', p.id, null, { error: e instanceof Error ? e.message : String(e) }); }
+      }
     }
     this.save();
   }
@@ -902,16 +1013,25 @@ export class DemoRepo implements Repo {
   async upsertEmployee(e: Partial<Employee> & { email: string; full_name: string; role: Role }) {
     await delay();
     this.requireSuper();
-    const email = e.email.trim().toLowerCase();
+    const email = String(e.email ?? '').trim().toLowerCase();
     this.require(/^[^@\s]+@[^@\s]+$/.test(email), 'Enter a valid email address');
+    this.require(['super_admin', 'admin', 'user'].includes(e.role), 'Choose a valid role');
+    this.require(e.status === undefined || e.status === 'active' || e.status === 'inactive', 'Choose a valid status');
+    this.require(e.team_id == null || this.s.teams.some((t) => t.id === e.team_id), 'That team does not exist');
+    const full_name = String(e.full_name ?? '').trim();
+    this.require(full_name.length > 0 && full_name.length <= 120, 'Enter a name');
     const dupe = this.s.employees.find((x) => x.email === email && x.id !== e.id);
     this.require(!dupe, 'An account with this email already exists');
+    // only these fields can be set from the Users page
+    const fields = { email, full_name, role: e.role, ...(e.status ? { status: e.status } : {}), ...(e.team_id !== undefined ? { team_id: e.team_id ?? null } : {}) };
     if (e.id) {
-      const row = this.s.employees.find((x) => x.id === e.id)!;
-      const prev = clone(row); Object.assign(row, { ...e, email });
-      this.log('update', 'employees', row.id, prev, clone(row));
+      const row = this.s.employees.find((x) => x.id === e.id);
+      this.require(!!row, 'User not found');
+      this.require(!(row!.id === this.meId && (fields.role !== 'super_admin' || fields.status === 'inactive')), 'You can’t remove your own Super Admin access');
+      const prev = clone(row!); Object.assign(row!, fields);
+      this.log('update', 'employees', row!.id, prev, clone(row!));
     } else {
-      const row: Employee = { id: uid(), status: 'active', team_id: null, ...e, email, is_demo: true };
+      const row: Employee = { id: uid(), status: 'active', team_id: null, ...fields, is_demo: this.mode === 'demo' };
       this.s.employees.push(row); if (this.mode === 'demo') this.s.passwords[email] = DEMO_PASSWORD;
       this.log('insert', 'employees', row.id, null, row);
     }
@@ -921,6 +1041,17 @@ export class DemoRepo implements Repo {
     await delay(300);
     this.requireSuper();
     const e = this.s.employees.find((x) => x.id === employeeId)!;
+    if (this.mode === 'google') {
+      this.require(e.status === 'active', 'Reactivate the user before inviting');
+      this.require(!e.email.endsWith('.invalid'), 'Add this person’s real email address first');
+      const url = this.linkFor(null);
+      this.serverOutbox.push({ id: uid(), to: e.email, cc: null, subject: 'You now have access to the CS QA Portal', reply_to: this.s.settings.report_email.reply_to || null,
+        sender_name: this.s.settings.report_email.sender_name || 'CS QA Portal',
+        html: `<p>Hi ${esc(e.full_name.split(' ')[0])},</p><p>You've been given access to the <strong>CS QA Performance Portal</strong>, where you can see your QA results${e.role === 'admin' ? ' and your team’s' : ''} and raise appeals.</p><p><a href="${esc(url)}">Open the CS QA Portal</a></p><p>Sign in with your company Google account (${esc(e.email)}). No separate password is needed.</p>` });
+      this.log('invite', 'employees', e.id, null, { email: e.email });
+      this.save();
+      return;
+    }
     this.log('invite', 'employees', e.id, null, { email: e.email, note: 'Demo mode: no email is sent. Password is ' + DEMO_PASSWORD });
     this.save();
   }
@@ -985,7 +1116,7 @@ export class DemoRepo implements Repo {
       }
       if (r.lead_name && !cam.team_id && cam.status === 'active' && !NOT_A_LEAD.test(r.lead_name.trim())) {
         let t = this.s.teams.find((x) => this.s.employees.find((e) => e.id === x.lead_id)?.full_name.toLowerCase() === r.lead_name!.trim().toLowerCase());
-        if (!t && this.mode === 'local') {
+        if (!t && this.mode !== 'demo') {
           // Local review: create the Lead + team from the sheet's Lead Name; the email is filled in later via the mapping import.
           const slug = r.lead_name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '.');
           const lead: Employee = { id: uid(), email: `${slug}@lead-email-needed.invalid`, full_name: r.lead_name.trim(), role: 'admin', status: 'active', team_id: null };
@@ -1006,7 +1137,8 @@ export class DemoRepo implements Repo {
       seen.add(key);
       const evaluator = r.evaluator_email ? this.s.employees.find((e) => e.email === r.evaluator_email) : undefined;
       this.s.evaluations.push({
-        id: uid(), task_id: r.task_id, task_link: r.task_link, cam_id: cam.id, evaluator_id: evaluator?.id ?? null, evaluator_email: r.evaluator_email,
+        // Google version stores audits in one file per year; the year in the id lets it load only what a page needs
+        id: this.mode === 'google' ? `${period.start_date.slice(0, 4)}-${uid()}` : uid(), task_id: r.task_id, task_link: r.task_link, cam_id: cam.id, evaluator_id: evaluator?.id ?? null, evaluator_email: r.evaluator_email,
         evaluator_name: r.evaluator_name, task_type: r.task_type, request_from: r.request_from, task_loaded_date: r.task_loaded_date, audited_at: r.audited_at,
         period_id: period.id, task_seq: r.task_seq, connection_id: r.connection_id, screenshot_url: r.screenshot_url, autofail: r.autofail, fcr: r.fcr,
         original_score: r.score, feedback: r.feedback, lead_name_at_audit: r.lead_name,
@@ -1020,16 +1152,44 @@ export class DemoRepo implements Repo {
     this.save();
     return { batch_id: batch.id, total: batch.total_rows, inserted: batch.inserted, duplicates: batch.duplicates, rejected: batch.rejected };
   }
-  async syncGoogleSheet(_scope: 'live' | 'all'): Promise<never> {
-    void _scope;
-    throw new Error('Google Sheets sync needs the sheets-sync Edge Function and a service account. It is not available in the demo — use CSV/XLSX upload instead.');
+  async syncGoogleSheet(scope: 'live' | 'all' | string[]): Promise<SheetSyncResult[]> {
+    if (this.mode !== 'google' || !this.server) throw new Error('Google Sheets sync needs the sheets-sync Edge Function and a service account. It is not available in the demo — use CSV/XLSX upload instead.');
+    this.requireSuper('Only QA Super Admins can sync the audit sheets');
+    const firstEver = this.s.evaluations.length === 0;
+    const sources = this.s.settings.data_sources.sources.filter((s) => s.enabled && (scope === 'all' || (scope === 'live' ? s.kind === 'live' : Array.isArray(scope) && scope.includes(s.id))));
+    const out: SheetSyncResult[] = [];
+    for (const src of sources) {
+      try {
+        this.server.progress?.(`Reading “${src.label}” from Google Sheets…`);
+        const { title, values } = this.server.readSheet(src);
+        this.server.progress?.(`Checking ${Math.max(0, values.length - 1).toLocaleString('en-US')} rows against the scoring rubric…`);
+        const m = mapAuditRows(rowsToRecords(values), this.s.taskTypes, this.s.parameters, {});
+        if (m.missingColumns.length) { out.push({ source: src.id, title, error: `Missing columns: ${m.missingColumns.join(', ')}` }); continue; }
+        // Archives are history, so they are published at once. New live weeks arrive as drafts for QA to publish.
+        const r = await this.importEvaluations(m.rows, { source: 'google_sheets', file_name: src.label, publish_new_periods: src.kind === 'archive' },
+          (d, n) => { if (d % 2000 < 200 || d === n) this.server?.progress?.(`Adding audits: ${d.toLocaleString('en-US')} of ${n.toLocaleString('en-US')}…`); });
+        out.push({ source: src.id, title, inserted: r.inserted, duplicates: r.duplicates, rejected: r.rejected + m.rejections.length });
+      } catch (e) {
+        out.push({ source: src.id, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    // First load of the live sheet: weeks that ended more than a week ago are history — publish them so dashboards aren't empty.
+    if (firstEver) {
+      const cutoff = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+      for (const pr of this.s.periods) if (pr.status === 'draft' && pr.end_date < cutoff) { pr.status = 'published'; pr.published_at = nowIso(); }
+      this.log('publish', 'reporting_periods', null, null, { note: `First sync: published past weeks ending before ${cutoff}` });
+      this.save();
+    }
+    return out;
   }
   async listImportBatches() { this.requireSuper(); return clone(this.s.batches); }
   async listImportRejections(batchId: string) { this.requireSuper(); return this.s.rejections.filter((r) => r.batch_id === batchId).map(({ row_number, reason }) => ({ row_number, reason })); }
-  async listAuditLogs(opts: { limit: number; offset: number; table?: string; action?: string }) {
+  async listAuditLogs(opts: { limit: number; offset: number; table?: string; action?: string; actorId?: string; from?: string; to?: string; record?: string }) {
     this.requireSuper();
     const names = new Map(this.s.employees.map((e) => [e.id, e.full_name]));
-    return this.s.audit.filter((a) => (!opts.table || a.table_name === opts.table) && (!opts.action || a.action === opts.action))
+    return this.s.audit.filter((a) => (!opts.table || a.table_name === opts.table) && (!opts.action || a.action === opts.action)
+      && (!opts.actorId || a.actor_id === opts.actorId) && (!opts.from || a.created_at.slice(0, 10) >= opts.from)
+      && (!opts.to || a.created_at.slice(0, 10) <= opts.to) && (!opts.record || a.record_id === opts.record.trim()))
       .slice(opts.offset, opts.offset + opts.limit).map((a) => ({ ...clone(a), actor_name: a.actor_id ? names.get(a.actor_id) ?? null : 'System' }));
   }
 
@@ -1045,7 +1205,7 @@ export class DemoRepo implements Repo {
       const last = this.s.weeklyEmails.filter((w) => w.period_id === periodId && w.cam_id === id).pop();
       return { cam_id: id, cam_name: c.full_name, cam_email: c.email, cam_active: c.status === 'active', lead_name: l?.full_name ?? null,
         lead_email: l?.status === 'active' ? l.email : null, tasks: this.s.evaluations.filter((e) => e.period_id === periodId && e.cam_id === id).length,
-        last_status: last?.status ?? null, last_sent_at: last?.queued_at ?? null, last_error: null, last_queued_at: last?.queued_at ?? null };
+        last_status: last?.status ?? null, last_sent_at: last ? (last.sent_at !== undefined ? last.sent_at : last.queued_at) : null, last_error: last?.error ?? null, last_queued_at: last?.queued_at ?? null };
     }).sort((a, b) => a.cam_name.localeCompare(b.cam_name));
   }
   async sendWeeklyEmails(periodId: string, camIds: string[] | null, resend: boolean) {
@@ -1059,12 +1219,19 @@ export class DemoRepo implements Repo {
     for (const r of rows) {
       if (!r.cam_active || !r.cam_email) { no_email++; continue; }
       if (!resend && r.last_status) { skipped++; continue; }
-      const { subject } = renderReportEmail(this.s.settings, p, r.cam_name);
       const cc = [cfg.cc_lead ? r.lead_email : null, cfg.extra_cc.trim() || null].filter(Boolean).join(', ') || null;
-      this.s.weeklyEmails.push({ period_id: periodId, cam_id: r.cam_id, to: r.cam_email, cc, subject, status: 'sent', queued_at: nowIso() });
+      if (this.mode === 'google') {
+        const { subject, html } = renderReportEmail(this.s.settings, p, r.cam_name);
+        const mail_id = uid();
+        this.serverOutbox.push({ id: mail_id, to: r.cam_email, cc, subject, html, reply_to: cfg.reply_to || null, sender_name: cfg.sender_name || 'CS QA', weekly: { period_id: periodId, cam_id: r.cam_id } });
+        this.s.weeklyEmails.push({ period_id: periodId, cam_id: r.cam_id, to: r.cam_email, cc, subject, status: 'queued', queued_at: nowIso(), sent_at: null, error: null, mail_id });
+      } else {
+        const { subject } = renderReportEmail(this.s.settings, p, r.cam_name);
+        this.s.weeklyEmails.push({ period_id: periodId, cam_id: r.cam_id, to: r.cam_email, cc, subject, status: 'sent', queued_at: nowIso() });
+      }
       queued++;
     }
-    this.log('weekly_emails_queued', 'reporting_periods', periodId, null, { week: p.short_label, queued, skipped_already_sent: skipped, no_email, note: 'Demo mode: no email is delivered' });
+    this.log('weekly_emails_queued', 'reporting_periods', periodId, null, { week: p.short_label, queued, skipped_already_sent: skipped, no_email, note: this.mode === 'google' ? 'Sent from the QA Gmail account' : 'Demo mode: no email is delivered' });
     this.save();
     return { queued, skipped, no_email, sent: queued, failed: 0, failures: [] };
   }
@@ -1094,6 +1261,10 @@ export class DemoRepo implements Repo {
   }
 
   // ------------------------------------------------------------------ notifications
+  async logExport(info: { scope: string; period: string; format: string }) {
+    if (!this.meOrNull()) return;
+    this.log('report_export', null, null, null, info); this.save();
+  }
   async listNotifications() {
     const me = this.meOrNull();
     if (!me) return [];
@@ -1103,6 +1274,101 @@ export class DemoRepo implements Repo {
     const me = this.me();
     this.s.notifications.forEach((n) => { if (n.recipient_id === me.id && !n.read_at && (!ids || ids.includes(n.id))) n.read_at = nowIso(); });
     this.save();
+  }
+
+  // ------------------------------------------------------------------ moving from local review to the Google version
+  /** Local review: users, teams, archive-name links and settings as one file (no passwords, no audits). */
+  async exportSetup(): Promise<SetupFile> {
+    this.requireSuper();
+    return { kind: 'csqa-setup', version: 1, exported_at: nowIso(), employees: clone(this.s.employees).map((e) => ({ ...e, auth_user_id: null })),
+      teams: clone(this.s.teams), settings: clone(this.s.settings), taskTypes: clone(this.s.taskTypes), parameters: clone(this.s.parameters),
+      aliases: clone(this.s.aliases ?? {}), historical: clone(this.s.historical ?? []) };
+  }
+  /** Google version: load that file. Only before any audits are loaded, so archive names and audits link to the same people. */
+  async importSetup(file: SetupFile): Promise<{ employees: number; teams: number }> {
+    this.requireSuper();
+    this.require(file?.kind === 'csqa-setup' && file.version === 1 && Array.isArray(file.employees) && Array.isArray(file.teams), 'This is not a CS QA Portal setup file');
+    this.require(this.s.evaluations.length === 0, 'Load the setup file before syncing any audits. (Audits are already loaded here.)');
+    const me = this.me();
+    const valid = (e: Employee) => typeof e.id === 'string' && typeof e.email === 'string' && typeof e.full_name === 'string' && ['super_admin', 'admin', 'user'].includes(e.role);
+    const emps: Employee[] = file.employees.filter(valid).map((e) => ({ id: e.id, email: e.email.trim().toLowerCase(), full_name: e.full_name, role: e.role, status: e.status === 'inactive' ? 'inactive' : 'active', team_id: e.team_id ?? null, auth_user_id: null }));
+    // You stay a Super Admin under your Google account, whatever the file says.
+    let mine = emps.find((e) => e.email === me.email);
+    if (mine) { mine.role = 'super_admin'; mine.status = 'active'; } else { mine = { ...me }; emps.push(mine); }
+    this.s.employees = emps;
+    this.s.teams = file.teams.filter((t) => typeof t.id === 'string' && typeof t.name === 'string').map((t) => ({ id: t.id, name: t.name, lead_id: t.lead_id ?? null }));
+    const keepUrl = this.s.settings.notifications.portal_url;
+    if (file.settings) { this.s.settings = { ...this.s.settings, ...clone(file.settings) }; this.s.settings.notifications.portal_url = keepUrl; }
+    if (Array.isArray(file.taskTypes) && file.taskTypes.length) this.s.taskTypes = clone(file.taskTypes);
+    if (Array.isArray(file.parameters) && file.parameters.length) this.s.parameters = clone(file.parameters);
+    this.s.aliases = clone(file.aliases ?? {}); this.s.historical = clone(file.historical ?? []);
+    this.upgradeState();
+    this.meId = mine.id;
+    this.log('import', 'employees', null, null, { note: 'Setup loaded from local review export', employees: emps.length, teams: this.s.teams.length });
+    this.save();
+    return { employees: emps.length, teams: this.s.teams.length };
+  }
+
+  // ------------------------------------------------------------------ Google server only (never callable from the browser)
+  /** Signs the request in as the Google account the server verified. Returns the portal account, or null (no access). */
+  serverActAs(email: string): Employee | null {
+    const e = this.s.employees.find((x) => x.email === email.trim().toLowerCase() && x.status === 'active') ?? null;
+    this.meId = e?.id ?? null;
+    return e;
+  }
+  /** First run: the Google account that owns the portal becomes its first Super Admin. */
+  serverBootstrapOwner(email: string) {
+    if (this.s.employees.some((e) => e.role === 'super_admin' && e.status === 'active')) return false;
+    const em = email.trim().toLowerCase();
+    const existing = this.s.employees.find((e) => e.email === em);
+    const name = em.split('@')[0].split(/[._-]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
+    if (existing) { existing.role = 'super_admin'; existing.status = 'active'; }
+    else this.s.employees.push({ id: uid(), email: em, full_name: name || em, role: 'super_admin', status: 'active', team_id: null });
+    this.serverActAs(em);
+    this.log('insert', 'employees', null, null, { email: em, note: 'Portal owner set up as the first Super Admin' });
+    this.save();
+    return true;
+  }
+  serverState() { return this.s; }
+  /** After the server has tried to send a weekly report email. */
+  serverMailResult(mailId: string, ok: boolean, error?: string) {
+    const w = this.s.weeklyEmails.find((x) => x.mail_id === mailId);
+    if (w) { w.status = ok ? 'sent' : 'failed'; w.sent_at = ok ? nowIso() : null; w.error = ok ? null : (error ?? 'Unknown error').slice(0, 300); this.save(); }
+  }
+  /** Hourly job: publish weeks that are due (if auto-publish is on) and remind people about overdue appeals. */
+  async serverScheduledJobs(nowInTz: string): Promise<{ published: string[]; reminders: number }> {
+    this.requireSuper();
+    const published: string[] = [];
+    const rep = this.s.settings.reporting;
+    for (const pr of [...this.s.periods].sort((a, b) => a.start_date.localeCompare(b.start_date))) {
+      // a time set for this week on Reporting & Settings
+      if (pr.status === 'draft' && pr.auto_publish_at && Date.now() >= Date.parse(pr.auto_publish_at)) { await this.setPeriodStatus(pr.id, 'published'); published.push(pr.short_label); }
+    }
+    if (rep.auto_publish) {
+      for (const pr of [...this.s.periods].sort((a, b) => a.start_date.localeCompare(b.start_date))) {
+        if (pr.status !== 'draft' || !this.s.evaluations.some((e) => e.period_id === pr.id)) continue;
+        // due = first day after the week ends that falls on the chosen weekday, at the chosen time (portal time zone)
+        const d = new Date(pr.end_date + 'T00:00:00Z');
+        for (let i = 0; i < 7; i++) { d.setUTCDate(d.getUTCDate() + 1); if ((((d.getUTCDay() + 6) % 7) + 1) === rep.auto_publish_dow) break; }
+        const due = `${d.toISOString().slice(0, 10)} ${rep.auto_publish_time || '10:00'}`;
+        if (nowInTz >= due) { await this.setPeriodStatus(pr.id, 'published'); published.push(pr.short_label); }
+      }
+    }
+    let reminders = 0;
+    for (const a of this.s.appeals) {
+      const v = this.toAppeal(a);
+      if (!v.overdue) continue;
+      if (this.s.notifications.some((n) => n.appeal_id === a.id && n.type === 'appeal_overdue' && n.created_at >= a.status_changed_at)) continue;
+      const to = a.status === 'pending_lead_review' ? a.lead_id
+        : (a.status === 'returned_to_cam' || (a.status === 'pending_additional_info' && a.info_requested_from === 'cam')) ? a.cam_id
+        : a.status === 'pending_additional_info' ? a.lead_id : null;
+      const title = `Appeal ${a.reference} is overdue`, msg = `Appeal ${a.reference} has passed its review target. Please take action.`;
+      if (to) this.notify(to, 'appeal_overdue', title, msg, `/appeals/${a.id}`, a.id);
+      else this.notifySupers('appeal_overdue', title, msg, `/appeals/${a.id}`, a.id);
+      reminders++;
+    }
+    if (published.length || reminders) this.save();
+    return { published, reminders };
   }
 
   // demo helpers

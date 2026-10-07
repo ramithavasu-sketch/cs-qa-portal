@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { AppealForm } from './Evaluations';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, ExternalLink, Lock, Paperclip } from 'lucide-react';
 import clsx from 'clsx';
@@ -12,7 +13,7 @@ import type { AppealDetail, AppealItem, LeadRecommendation } from '../lib/types'
 const ACTION_LABEL: Record<string, string> = {
   draft_saved: 'Saved as draft', submitted: 'Submitted to Team Lead', lead_forwarded: 'Forwarded to QA', lead_returned: 'Returned to CAM for clarification',
   cam_responded: 'CAM responded', lead_responded: 'Team Lead responded', qa_requested_info: 'QA requested more information', qa_decided: 'QA decision',
-  qa_reopened: 'Reopened by QA', closed: 'Closed', comment: 'Comment', evidence_added: 'Evidence attached',
+  qa_reopened: 'Reopened by QA', closed: 'Closed', comment: 'Comment', evidence_added: 'Evidence attached', comment_shared: 'Internal comment shared with CAM',
 };
 const STEPS = ['Submitted', 'Lead review', 'QA review', 'Decision'];
 function stepIndex(status: string) {
@@ -33,6 +34,8 @@ export default function AppealDetailPage() {
   const pname = (it: AppealItem) => (it.is_autofail ? 'Autofail decision' : ref.parameters.find((p) => p.id === it.parameter_id)?.name ?? '?');
   const pmax = (it: AppealItem) => (it.is_autofail ? 1 : e?.scores.find((s) => s.parameter_id === it.parameter_id)?.max_score ?? 0);
   const step = stepIndex(a.status);
+  const nameOf = (id: string | null) => (id ? ref.employees.find((x) => x.id === id)?.full_name ?? (id === me!.id ? me!.full_name : 'QA') : '—');
+  const criteriaOf = (it: AppealItem) => (it.is_autofail ? null : ref.parameters.find((p) => p.id === it.parameter_id)?.criteria ?? null);
   const final = ['approved', 'partially_approved', 'rejected', 'closed'].includes(a.status);
 
   return (
@@ -56,11 +59,12 @@ export default function AppealDetailPage() {
               <thead><tr><th className={th}>Parameter</th><th className={th + ' text-right'}>Max</th><th className={th + ' text-right'}>Original</th><th className={th + ' text-right'}>Requested</th><th className={th}>Decision</th><th className={th + ' text-right'}>Revised</th></tr></thead>
               <tbody>{items.map((it) => (
                 <tr key={it.id}>
-                  <td className={td + ' font-medium'}>{pname(it)}{it.decision_reason && it.decision !== 'pending' && <div className="mt-0.5 text-[12px] font-normal text-muted">{it.decision_reason}</div>}</td>
+                  <td className={td + ' font-medium'}>{pname(it)}{it.decision_reason && it.decision !== 'pending' && <div className="mt-0.5 text-[12px] font-normal text-muted">{it.decision_reason}</div>}
+                    {it.decided_at && it.decision !== 'pending' && <div className="mt-0.5 text-[11.5px] font-normal text-faint">Decided by {nameOf(it.decided_by)} · {fmtDateTime(it.decided_at)}</div>}</td>
                   <td className={td + ' text-right tnum'}>{it.is_autofail ? '—' : pmax(it)}</td>
                   <td className={td + ' text-right tnum'}>{it.is_autofail ? 'Autofail' : it.original_score ?? 'NA'}</td>
                   <td className={td + ' text-right tnum'}>{it.is_autofail ? 'Remove' : it.requested_score ?? '—'}</td>
-                  <td className={td}>{it.decision === 'pending' ? <Pill>Pending</Pill> : it.decision === 'approved' ? <Pill tone="good">Approved</Pill> : <Pill tone="bad">Rejected</Pill>}</td>
+                  <td className={td}>{it.decision === 'pending' ? <Pill>Pending</Pill> : it.decision === 'approved' ? (isPartial(it, pmax(it)) ? <Pill tone="good">Partially approved</Pill> : <Pill tone="good">Approved</Pill>) : <Pill tone="bad">Rejected</Pill>}</td>
                   <td className={td + ' text-right tnum'}>{it.decision === 'approved' ? (it.is_autofail ? 'No autofail' : it.revised_score) : '—'}</td>
                 </tr>
               ))}</tbody>
@@ -68,7 +72,7 @@ export default function AppealDetailPage() {
           </Card>
 
           <Card title="CAM’s reason for appeal"><p className="whitespace-pre-wrap text-[13.5px] leading-relaxed">{a.reason}</p>
-            {a.resolution_note && <div className="mt-4 rounded border border-brand/30 bg-brand-soft/40 p-3"><div className="eyebrow mb-1">QA resolution · {fmtDateTime(a.decided_at)}</div><p className="text-[13.5px]">{a.resolution_note}</p></div>}
+            {a.resolution_note && <div className="mt-4 rounded border border-brand/30 bg-brand-soft/40 p-3"><div className="eyebrow mb-1">QA resolution · {APPEAL_STATUS_LABEL[a.status]} · {nameOf(a.decided_by)} · {fmtDateTime(a.decided_at)}</div><p className="text-[13.5px]">{a.resolution_note}</p></div>}
           </Card>
 
           {e && (
@@ -82,7 +86,8 @@ export default function AppealDetailPage() {
                 <table className="w-full text-[12.5px]"><tbody>
                   {e.scores.map((s) => (
                     <tr key={s.id} className={clsx(items.some((i) => i.parameter_id === s.parameter_id) && 'bg-warn-soft/60')}>
-                      <td className="py-1 pr-3">{s.parameter_name}</td><td className="py-1 pr-3 text-right tnum">{s.earned ?? 'NA'}/{s.max_score}</td>
+                      <td className="py-1 pr-3">{s.parameter_name}{s.remarks && <div className="text-[11.5px] text-muted">QA remark: {s.remarks}</div>}
+                        {items.some((i) => i.parameter_id === s.parameter_id) && criteriaOf(items.find((i) => i.parameter_id === s.parameter_id)!) && <div className="text-[11.5px] text-muted">Scoring criteria: {criteriaOf(items.find((i) => i.parameter_id === s.parameter_id)!)}</div>}</td><td className="py-1 pr-3 text-right tnum">{s.earned ?? 'NA'}/{s.max_score}</td>
                       <td className="py-1 text-muted">{s.adjusted ? `original ${s.original_earned}` : ''}</td>
                     </tr>
                   ))}
@@ -113,6 +118,7 @@ export default function AppealDetailPage() {
                   </div>
                   <div className="text-[12px] text-muted">{ev.actor_name ?? 'System'} · {fmtDateTime(ev.created_at)}{ev.to_status && ev.from_status !== ev.to_status ? ` · → ${APPEAL_STATUS_LABEL[ev.to_status]}` : ''}</div>
                   {ev.comment && <p className="mt-1 whitespace-pre-wrap rounded bg-sunken px-2.5 py-1.5 text-[13px]">{ev.comment}</p>}
+                  {ev.visibility === 'internal' && ev.action === 'comment' && me!.role !== 'user' && (ev.actor_id === me!.id || me!.role === 'super_admin') && <ShareButton eventId={ev.id} onDone={bump} />}
                 </li>
               ))}
             </ol>
@@ -129,7 +135,19 @@ function EvidenceLink({ path, name, size }: { path: string; name: string; size: 
     <span className="inline-flex flex-wrap items-center gap-2 text-[13px]">
       <Paperclip className="h-4 w-4 text-muted" />
       <button className="text-brand hover:underline" onClick={async () => {
-        try { const url = await repo.evidenceUrl(path); const w = window.open(url, '_blank', 'noopener'); if (!w) setErr('Your browser blocked the new tab.'); } catch (x) { setErr(x instanceof Error ? x.message : String(x)); }
+        try {
+          const url = await repo.evidenceUrl(path);
+          if (url.startsWith('data:')) {
+            // files kept by the portal itself (demo, local review, Google version): save a copy
+            const blob = await (await fetch(url)).blob();
+            const href = URL.createObjectURL(blob);
+            const a = document.createElement('a'); a.href = href; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+            setTimeout(() => URL.revokeObjectURL(href), 10_000);
+          } else {
+            const w = window.open(url, '_blank');
+            if (!w) setErr('Your browser blocked the new tab.'); else w.opener = null;
+          }
+        } catch (x) { setErr(x instanceof Error ? x.message : String(x)); }
       }}>{name}</button>
       <span className="text-faint tnum">{(size / 1024).toFixed(0)} KB</span>{err && <span className="text-bad text-[12px]">{err}</span>}
     </span>
@@ -160,7 +178,7 @@ function ActionPanel({ d, onDone, role, meId, pname, pmax }: { d: AppealDetail; 
   return (
     <div className="flex flex-col gap-5">
       {awaitingMe && <RespondCard appealId={a.id} onDone={onDone} request={[...d.events].reverse().find((e) => e.action === 'lead_returned' || e.action === 'qa_requested_info')?.comment ?? null} dueAt={a.info_due_at} />}
-      {isCam && a.status === 'draft' && <DraftCard appealId={a.id} onDone={onDone} />}
+      {isCam && a.status === 'draft' && <DraftCard d={d} onDone={onDone} />}
       {isLead && a.status === 'pending_lead_review' && <LeadReviewCard appealId={a.id} onDone={onDone} />}
       {isQa && a.status === 'pending_qa_review' && <QaDecisionCard d={d} onDone={onDone} pname={pname} pmax={pmax} />}
       {isQa && <QaSecondaryActions d={d} onDone={onDone} pname={pname} />}
@@ -200,15 +218,39 @@ function RespondCard({ appealId, onDone, request, dueAt }: { appealId: string; o
   );
 }
 
-function DraftCard({ appealId, onDone }: { appealId: string; onDone: () => void }) {
+function DraftCard({ d, onDone }: { d: AppealDetail; onDone: () => void }) {
   const toast = useToast(); const [busy, setBusy] = useState(false); const [err, setErr] = useState<unknown>(null);
+  const [edit, setEdit] = useState(false);
+  const appealId = d.appeal.id;
+  const deadline = useAsync(() => repo.getAppealDeadline(d.appeal.evaluation_id), [d.appeal.evaluation_id]);
   return (
     <Card title="Draft appeal">
-      <p className="mb-3 text-[13px] text-muted">This draft has not been sent. Submit it to route it to your Team Lead.</p>
+      <p className="mb-3 text-[13px] text-muted">This draft has not been sent. Submit it to route it to your Team Lead{deadline.data ? <> before <strong className="text-ink">{fmtDateTime(deadline.data)}</strong></> : ''}.</p>
       <ErrorBox error={err} />
-      <Button loading={busy} onClick={async () => { setBusy(true); try { await repo.submitDraftAppeal(appealId); toast('Appeal submitted to your Team Lead.'); onDone(); } catch (x) { setErr(x); } finally { setBusy(false); } }}>Submit to Team Lead</Button>
+      <div className="flex flex-wrap gap-2">
+        <Button loading={busy} onClick={async () => { setBusy(true); try { await repo.submitDraftAppeal(appealId); toast('Appeal submitted to your Team Lead.'); onDone(); } catch (x) { setErr(x); } finally { setBusy(false); } }}>Submit to Team Lead</Button>
+        {d.evaluation && <Button variant="secondary" onClick={() => setEdit(true)}>Edit draft</Button>}
+      </div>
+      {edit && d.evaluation && <AppealForm open onClose={() => setEdit(false)} evaluation={d.evaluation} deadline={deadline.data ?? null} onDone={onDone}
+        draft={{ id: appealId, reference: d.appeal.reference, reason: d.appeal.reason, items: d.items }} />}
     </Card>
   );
+}
+
+function ShareButton({ eventId, onDone }: { eventId: string; onDone: () => void }) {
+  const toast = useToast(); const [open, setOpen] = useState(false);
+  return (<>
+    <button className="mt-1 text-[12px] font-medium text-brand hover:underline" onClick={() => setOpen(true)}>Share with CAM</button>
+    <ConfirmModal open={open} title="Share this comment with the CAM?" confirmLabel="Share with CAM" onClose={() => setOpen(false)}
+      onConfirm={async () => { await repo.shareAppealComment(eventId); toast('Comment is now visible to the CAM.'); onDone(); }}
+      body={<p>The CAM will be able to read this comment in the appeal timeline. This cannot be undone.</p>} />
+  </>);
+}
+
+/** Approved and raised, but not as far as requested (or not to the maximum when nothing was requested). */
+function isPartial(it: AppealItem, max: number) {
+  return it.decision === 'approved' && !it.is_autofail && it.revised_score !== null
+    && it.revised_score > (it.original_score ?? 0) && it.revised_score < (it.requested_score ?? max);
 }
 
 function LeadReviewCard({ appealId, onDone }: { appealId: string; onDone: () => void }) {
@@ -240,6 +282,7 @@ function LeadReviewCard({ appealId, onDone }: { appealId: string; onDone: () => 
 
 function QaDecisionCard({ d, onDone, pname, pmax }: { d: AppealDetail; onDone: () => void; pname: (i: AppealItem) => string; pmax: (i: AppealItem) => number }) {
   const toast = useToast();
+  const ref = useRef_();
   const e = d.evaluation;
   const [dec, setDec] = useState<Record<string, { decision: '' | 'approved' | 'rejected'; revised: string; reason: string }>>(
     Object.fromEntries(d.items.map((i) => [i.id, { decision: '', revised: i.requested_score !== null && !i.is_autofail ? String(i.requested_score) : '', reason: '' }])));
@@ -255,6 +298,8 @@ function QaDecisionCard({ d, onDone, pname, pmax }: { d: AppealDetail; onDone: (
     setErr(null);
     const missing = d.items.find((i) => !dec[i.id].decision);
     if (missing) return setErr(new Error(`Choose approve or reject for “${pname(missing)}”.`));
+    const noReason = d.items.find((i) => dec[i.id].decision === 'approved' && dec[i.id].reason.trim().length < 5);
+    if (noReason) return setErr(new Error(`Give the reason for the score adjustment on “${pname(noReason)}”.`));
     setBusy(true);
     try {
       const extras = Object.entries(extra).filter(([, v]) => v !== '').map(([pid, v]) => ({ parameter_id: pid, revised_score: Number(v), reason: extraReason }));
@@ -285,6 +330,8 @@ function QaDecisionCard({ d, onDone, pname, pmax }: { d: AppealDetail; onDone: (
                   <span className="font-medium">{pname(i)}</span>
                   <span className="text-muted tnum">{i.is_autofail ? 'Autofail = Yes' : `original ${i.original_score}/${pmax(i)}${i.requested_score !== null ? ` · requested ${i.requested_score}` : ''}`}</span>
                 </div>
+                {!i.is_autofail && (() => { const c = ref.parameters.find((p) => p.id === i.parameter_id)?.criteria; const r = e?.scores.find((x) => x.parameter_id === i.parameter_id)?.remarks;
+                  return (c || r) ? <div className="mt-1 text-[12px] text-muted">{c && <div><span className="eyebrow mr-1">Scoring criteria</span>{c}</div>}{r && <div><span className="eyebrow mr-1">QA remark</span>{r}</div>}</div> : null; })()}
                 <div className="mt-2 flex flex-wrap items-end gap-3">
                   {(['approved', 'rejected'] as const).map((k) => (
                     <label key={k} htmlFor={`dec-${i.id}-${k}`} className="flex items-center gap-1.5"><input id={`dec-${i.id}-${k}`} type="radio" name={`dec-${i.id}`} checked={st.decision === k} onChange={() => setDec((x) => ({ ...x, [i.id]: { ...st, decision: k } }))} />{k === 'approved' ? 'Approve' : 'Reject'}</label>
@@ -295,7 +342,7 @@ function QaDecisionCard({ d, onDone, pname, pmax }: { d: AppealDetail; onDone: (
                   )}
                 </div>
                 <label htmlFor={`reason-${i.id}`} className="sr-only">Reason for {pname(i)}</label>
-                <input id={`reason-${i.id}`} className={inputCls + ' mt-2'} placeholder="Reason for this parameter (optional — defaults to the resolution remarks)" value={st.reason} onChange={(x) => setDec((y) => ({ ...y, [i.id]: { ...st, reason: x.target.value } }))} />
+                <input id={`reason-${i.id}`} className={inputCls + ' mt-2'} placeholder={st.decision === 'approved' ? 'Reason for the score adjustment (required)' : 'Reason for this parameter (optional — defaults to the resolution remarks)'} value={st.reason} onChange={(x) => setDec((y) => ({ ...y, [i.id]: { ...st, reason: x.target.value } }))} />
               </div>
             );
           })}
@@ -339,7 +386,7 @@ function QaSecondaryActions({ d, onDone, pname }: { d: AppealDetail; onDone: () 
       </div>
       <ConfirmModal open={reopen} title="Reopen appeal" confirmLabel="Reopen" onClose={() => setReopen(false)}
         onConfirm={async () => { await repo.qaReopenAppeal(a.id, reason); toast('Appeal reopened.'); onDone(); }}
-        body={<><p>The appeal returns to Pending QA Review. Existing score changes stay until you record a new decision.</p><ReasonBox value={reason} onChange={setReason} /></>} />
+        body={<><p>The appeal returns to Pending QA Review. Existing score changes stay until you record a new decision. The previous decision remains in the timeline and the audit log.</p><ReasonBox value={reason} onChange={setReason} /></>} />
       <ConfirmModal open={close} title="Close appeal" confirmLabel="Close appeal" danger onClose={() => setClose(false)}
         onConfirm={async () => { await repo.closeAppeal(a.id, reason); toast('Appeal closed.'); onDone(); }}
         body={<><p>Closing ends the workflow. The CAM is notified.</p><ReasonBox value={reason} onChange={setReason} /></>} />

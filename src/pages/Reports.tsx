@@ -30,7 +30,7 @@ function useScopes() {
 
 function useScopeEvaluations(camIds: string[] | undefined, weeks: number) {
   const ref = useRef_();
-  const periods = ref.publishedPeriods.slice(-weeks);
+  const periods = useMemo(() => ref.publishedPeriods.slice(-weeks), [ref.publishedPeriods, weeks]);
   const ev = useAsync(() => repo.getEvaluations({ periodIds: periods.map((p) => p.id), camIds }), [periods.map((p) => p.id).join(','), camIds?.join(',')]);
   const ap = useAsync(() => repo.listAppeals(camIds?.length === 1 ? { camId: camIds[0] } : {}), [camIds?.join(',')]);
   return { periods, evals: ev.data ?? [], appeals: ap.data ?? [], loading: ev.loading || ap.loading, error: ev.error || ap.error };
@@ -42,9 +42,10 @@ export function ReportsPage() {
   const scopes = useScopes();
   const [scopeKey, setScopeKey] = useState(scopes[0]?.key ?? '');
   const scope = scopes.find((s) => s.key === scopeKey) ?? scopes[0];
-  const [tab, setTab] = useState<'week' | 'month'>('week');
+  const [tab, setTab] = useState<'week' | 'month' | 'quarter'>('week');
   const camIds = scope.kind === 'org' ? undefined : scope.cams.map((c) => c.id);
-  const d = useScopeEvaluations(camIds, 26);
+  // 60 weeks: a year of history plus the quarter before it, so every row can show its variance.
+  const d = useScopeEvaluations(camIds, 60);
   const toast = useToast();
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -61,6 +62,7 @@ export function ReportsPage() {
         historyWeeks: hw, appeals: d.appeals, parameters: ref.parameters, settings: ref.settings, taskTypeNames: ref.taskTypeNames, generatedBy: me!.full_name,
         cams: scope.kind === 'cam' ? undefined : scope.cams, teams: ref.teams, employees: ref.employees });
       await downloadReport(m, format);
+      void repo.logExport({ scope: scope.label, period: sel.label, format });
       toast(isDemo ? `${format.toUpperCase()} generated. The hosted demo sandbox may block the download; the deployed portal saves it normally.` : `${format.toUpperCase()} downloaded.`, isDemo ? 'info' : 'good');
     } catch (x) { toast(x instanceof Error ? x.message : String(x), 'bad'); } finally { setBusy(null); }
   };
@@ -76,7 +78,13 @@ export function ReportsPage() {
     const prev = arr[i + 1] ? d.evals.filter((e) => inM(arr[i + 1]).has(e.period_id)) : [];
     return { key: m, label: monthLabel(m), range: `${inM(m).size} audit week(s)`, published: null as string | null, cur, s: summarize(cur), ps: summarize(prev) };
   });
-  const rows = tab === 'week' ? weekRows : months;
+  const quarters = quarterOptions(d.periods).map((q, i, arr) => {
+    const inQ = (k: string) => new Set(buildSelection(d.periods, 'quarter', k).current.map((p) => p.id));
+    const cur = d.evals.filter((e) => inQ(q).has(e.period_id));
+    const prev = arr[i + 1] ? d.evals.filter((e) => inQ(arr[i + 1]).has(e.period_id)) : [];
+    return { key: q, label: q.replace('-', ' '), range: `${inQ(q).size} audit week(s)`, published: null as string | null, cur, s: summarize(cur), ps: summarize(prev) };
+  });
+  const rows = tab === 'week' ? weekRows : tab === 'month' ? months : quarters;
   const appealText = (evs: Evaluation[], ap: Appeal[]) => {
     const ids = new Set(evs.map((e) => e.id));
     const list = ap.filter((a) => ids.has(a.evaluation_id));
@@ -87,12 +95,12 @@ export function ReportsPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Weekly & Monthly Reports" subtitle="Each audit week becomes a report automatically when QA publishes it. Nothing to adjust by hand — pick a row and download."
+      <PageHeader title="Report History" subtitle={<>Each audit week becomes a report automatically when QA publishes it. Nothing to adjust by hand — pick a row and download. For any other date range use <a href="#/downloads" className="text-brand hover:underline">Download Reports</a>.</>}
         actions={scopes.length > 1 && (<div className="flex items-center gap-2"><label htmlFor="rep-scope" className="text-[13px] text-muted">Report for</label>
           <select id="rep-scope" className={inputBase + ' w-auto max-w-[280px]'} value={scope.key} onChange={(e) => setScopeKey(e.target.value)}>{scopes.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}</select></div>)} />
-      <Tabs value={tab} onChange={setTab} tabs={[{ value: 'week', label: 'Weekly reports' }, { value: 'month', label: 'Monthly summaries' }]} />
+      <Tabs value={tab} onChange={setTab} tabs={[{ value: 'week', label: 'Weekly reports' }, { value: 'month', label: 'Monthly summaries' }, { value: 'quarter', label: 'Quarterly summaries' }]} />
       <ErrorBox error={d.error} />
-      {d.loading ? <Loading /> : rows.length === 0 ? <EmptyState title="No published reports yet" /> : (
+      {d.loading ? <Loading /> : rows.length === 0 ? <EmptyState title="No QA evaluations are available for this reporting period." body="Reports appear here as soon as QA publishes an audit week." /> : (
         <Card pad={false}>
           <Table>
             <thead><tr><th className={th}>Audit period</th><th className={th + ' text-right'}>Tasks audited</th><th className={th + ' text-right'}>Average score</th><th className={th + ' text-right'}>Variance</th>
@@ -132,7 +140,8 @@ export function DownloadsPage() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const scope = scopes.find((s) => s.key === scopeKey) ?? scopes[0];
-  const periods = ref.publishedPeriods;
+  const [drafts, setDrafts] = useState(false);
+  const periods = me!.role === 'super_admin' && drafts ? ref.periods : ref.publishedPeriods;
   const sel = buildSelection(periods, mode, mode === 'custom' ? `${from}..${to}` : mode === 'week' ? anchor : mode === 'month' ? (monthOptions(periods).includes(anchor) ? anchor : undefined) : (quarterOptions(periods).includes(anchor) ? anchor : undefined));
   const go = async () => {
     setBusy(true); setErr(null);
@@ -148,6 +157,7 @@ export function DownloadsPage() {
         cams: scope.kind === 'cam' ? undefined : scope.cams, teams: ref.teams, employees: ref.employees });
       if (!m.evaluations.length) throw new Error('No QA evaluations are available for this reporting period.');
       await downloadReport(m, format);
+      void repo.logExport({ scope: scope.label, period: sel.label, format });
       toast(isDemo ? 'Report generated. The hosted demo sandbox may block the download; the deployed portal saves it normally.' : 'Report downloaded.', isDemo ? 'info' : 'good');
     } catch (x) { setErr(x); } finally { setBusy(false); }
   };
@@ -158,9 +168,10 @@ export function DownloadsPage() {
         <Card title="Report options">
           <div className="flex flex-col gap-4">
             <Field label="Report for" htmlFor="dl-scope"><select id="dl-scope" className={inputCls} value={scope.key} onChange={(e) => setScopeKey(e.target.value)}>{scopes.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}</select></Field>
+            {me!.role === 'super_admin' && <label htmlFor="dl-drafts" className="flex items-center gap-2 text-[13px]"><input id="dl-drafts" type="checkbox" checked={drafts} onChange={(e) => setDrafts(e.target.checked)} />Include unpublished (draft) weeks — QA only</label>}
             <Field label="Period type" htmlFor="dl-mode"><select id="dl-mode" className={inputCls} value={mode} onChange={(e) => { const m = e.target.value as PeriodMode; setMode(m); setAnchor(m === 'week' ? periods[periods.length - 1]?.id ?? '' : m === 'month' ? monthOptions(periods)[0] : quarterOptions(periods)[0]); }}>
               <option value="week">Weekly</option><option value="month">Monthly</option><option value="quarter">Quarterly</option><option value="custom">Custom date range</option></select></Field>
-            {mode === 'week' && <Field label="Audit week" htmlFor="dl-week"><select id="dl-week" className={inputCls} value={anchor} onChange={(e) => setAnchor(e.target.value)}>{[...periods].reverse().map((p) => <option key={p.id} value={p.id}>{p.short_label} · {fmtRange(p.start_date, p.end_date)}</option>)}</select></Field>}
+            {mode === 'week' && <Field label="Audit week" htmlFor="dl-week"><select id="dl-week" className={inputCls} value={anchor} onChange={(e) => setAnchor(e.target.value)}>{[...periods].reverse().map((p) => <option key={p.id} value={p.id}>{p.short_label} · {fmtRange(p.start_date, p.end_date)}{p.status === 'draft' ? ' (draft)' : ''}</option>)}</select></Field>}
             {mode === 'month' && <Field label="Month" htmlFor="dl-month"><select id="dl-month" className={inputCls} value={anchor} onChange={(e) => setAnchor(e.target.value)}>{monthOptions(periods).map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}</select></Field>}
             {mode === 'quarter' && <Field label="Quarter" htmlFor="dl-q"><select id="dl-q" className={inputCls} value={anchor} onChange={(e) => setAnchor(e.target.value)}>{quarterOptions(periods).map((q) => <option key={q} value={q}>{q.replace('-', ' ')}</option>)}</select></Field>}
             {mode === 'custom' && <div className="grid grid-cols-2 gap-3">
@@ -168,7 +179,7 @@ export function DownloadsPage() {
               <Field label="End date" htmlFor="dl-to"><input id="dl-to" type="date" className={inputCls} value={to} onChange={(e) => setTo(e.target.value)} /></Field></div>}
             <fieldset><legend className="mb-1.5 text-[13px] font-medium">Format</legend>
               <div className="flex flex-col gap-1.5 text-[13px]">
-                {([['pdf', 'PDF', 'Formatted report with KPIs, trend, parameters, strengths, task feedback and appeals'], ['xlsx', 'Excel (.xlsx)', 'Separate sheets: Summary, CAM Summary, Parameters, Task Details, Appeals'], ['csv', 'CSV', 'One row per audited task with every parameter score']] as const).map(([v, l, h]) => (
+                {([['pdf', 'PDF', 'Formatted report with KPIs, trend, parameters, strengths, task feedback and appeals'], ['xlsx', 'Excel (.xlsx)', 'Separate sheets: Summary, CAM Summary, Parameters, Task Details, Appeals'], ['csv', 'CSV', 'Report summary header, then one row per audited task with every parameter score']] as const).map(([v, l, h]) => (
                   <label key={v} htmlFor={`fmt-${v}`} className="flex items-start gap-2"><input id={`fmt-${v}`} type="radio" name="fmt" checked={format === v} onChange={() => setFormat(v)} className="mt-1" /><span><span className="font-medium">{l}</span><span className="block text-[12px] text-muted">{h}</span></span></label>
                 ))}
               </div></fieldset>

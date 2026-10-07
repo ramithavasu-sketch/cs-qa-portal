@@ -6,7 +6,7 @@ import {
   CalendarCog, Upload, ScrollText, Mail, LogOut, Menu, X, ShieldCheck,
 } from 'lucide-react';
 import { useApp, useAsync } from '../app/context';
-import { repo, demoRepo, localRepo } from '../data';
+import { repo, demoRepo, localRepo, isGoogle } from '../data';
 import { AutoSheetSync } from './SheetSync';
 import { fmtDateTime } from '../lib/metrics';
 
@@ -17,7 +17,7 @@ const MAIN: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/evaluations', label: 'Task Evaluations', icon: ListChecks },
   { to: '/parameters', label: 'Parameter Analysis', icon: BarChart3 },
-  { to: '/reports', label: 'Weekly & Monthly Reports', icon: FileText },
+  { to: '/reports', label: 'Report History', icon: FileText },
   { to: '/downloads', label: 'Download Reports', icon: Download },
   { to: '/appeals', label: 'Appeals', icon: Scale },
   { to: '/notifications', label: 'Notifications', icon: Bell },
@@ -60,8 +60,9 @@ export default function Layout() {
         <div className="border-t border-line p-3 text-[12px] text-muted">
           <div className="font-medium text-ink">{me.full_name}</div>
           <div>{ROLE_LABEL[me.role]}</div>
-          {me.team_name && <div>{me.team_name}{me.role === 'user' && me.lead_name ? ` · Lead: ${me.lead_name}` : ''}</div>}
-          <button onClick={() => signOut()} className="mt-2 inline-flex items-center gap-1.5 font-medium text-ink hover:text-brand"><LogOut className="h-4 w-4" />Sign out</button>
+          {me.team_name && <div>{me.role === 'admin' ? 'Leads: ' : ''}{me.team_name}{me.role === 'user' && me.lead_name ? ` · Lead: ${me.lead_name}` : ''}</div>}
+          {isGoogle ? <div className="mt-2 text-faint">Signed in with Google · {me.email}</div>
+            : <button onClick={() => signOut()} className="mt-2 inline-flex items-center gap-1.5 font-medium text-ink hover:text-brand"><LogOut className="h-4 w-4" />Sign out</button>}
         </div>
       </aside>
       {open && <div className="fixed inset-0 z-30 bg-black/30 lg:hidden" onClick={() => setOpen(false)} />}

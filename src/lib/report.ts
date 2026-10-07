@@ -1,7 +1,7 @@
 // Builds one report model from already-authorised data, then renders it as PDF,
 // Excel or CSV. Because the input rows come from RLS-filtered queries, an export
 // can never contain data the user cannot see on screen.
-import { buildInsights, camRows, fmtDate, fmtDateTime, fmtPct, fmtPp, parameterStats, summarize, variance, weeklyTrend,
+import { RECOMMENDATION_LABEL, RATING_LABEL, finalRating, buildInsights, camRows, fmtDate, fmtDateTime, fmtPct, fmtPp, parameterStats, summarize, variance, weeklyTrend,
   APPEAL_STATUS_LABEL, type Insights, type PeriodSelection, type Summary, type TrendPoint, type ParamStat, type CamRow } from './metrics';
 import type { Appeal, Employee, Evaluation, Parameter, Period, PortalSettings, Team } from './types';
 
@@ -9,7 +9,7 @@ export interface ReportModel {
   kind: 'cam' | 'team' | 'org';
   title: string; subject: string; periodLabel: string; previousLabel: string; generatedAt: string; generatedBy: string;
   summary: Summary; prevSummary: Summary; variance: number | null;
-  trend: TrendPoint[]; params: ParamStat[]; insights: Insights | null; camTable: CamRow[] | null;
+  trend: TrendPoint[]; params: ParamStat[]; prevParams: Record<string, ParamStat>; insights: Insights | null; camTable: CamRow[] | null;
   evaluations: Evaluation[]; appeals: Appeal[]; parameters: Parameter[]; settings: PortalSettings; taskTypeNames: Record<string, string>;
 }
 
@@ -29,6 +29,7 @@ export function buildReport(args: {
     summary: s, prevSummary: ps, variance: variance(s.avg, ps.avg),
     trend: weeklyTrend(args.history, args.historyWeeks),
     params: parameterStats(args.cur, args.parameters, args.taskTypeNames).filter((p) => p.evaluated > 0),
+    prevParams: Object.fromEntries(parameterStats(args.prev, args.parameters, args.taskTypeNames).filter((p) => p.evaluated > 0).map((p) => [p.parameter.id, p])),
     insights: args.kind === 'cam' ? buildInsights(args.cur, args.prev, args.history, args.historyWeeks, args.parameters, args.taskTypeNames, args.settings) : null,
     camTable: args.cams ? camRows(args.cams, args.teams ?? [], args.employees ?? [], args.cur, args.prev, args.history, args.historyWeeks, args.appeals, args.settings) : null,
     evaluations: [...args.cur].sort((a, b) => a.audited_at.localeCompare(b.audited_at)),
@@ -37,6 +38,8 @@ export function buildReport(args: {
   };
 }
 
+const NO_DATA = 'No QA evaluations are available for this reporting period.';
+const prevPct = (m: ReportModel, p: ParamStat) => m.prevParams[p.parameter.id]?.pct ?? null;
 const CONFIDENTIAL = 'CONFIDENTIAL — Internal CS QA performance data. For the named recipient(s) only. Do not forward.';
 const fileBase = (m: ReportModel) => `CS_QA_${m.kind === 'cam' ? 'Report' : m.kind === 'team' ? 'Team_Report' : 'Consolidated'}_${m.subject.replace(/[^\w]+/g, '_')}_${m.periodLabel.replace(/[^\w]+/g, '_')}`.replace(/_+/g, '_');
 
@@ -59,7 +62,15 @@ export function reportToCsv(m: ReportModel): Blob {
     if (/^[=+\-@]/.test(s)) s = "'" + s; // prevent spreadsheet formula injection
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const lines = [header, ...rows].map((r) => r.map(esc).join(','));
+  // Summary block first (period, generation date, confidentiality), then one row per task.
+  const meta: unknown[][] = [
+    [m.title], [m.subject], [`Period: ${m.periodLabel}`, `Compared with: ${m.previousLabel}`],
+    [`Generated: ${fmtDateTime(m.generatedAt)}`, `By: ${m.generatedBy}`], [CONFIDENTIAL],
+    ['Tasks audited', m.summary.tasks, 'Average QA score (%)', m.summary.avg ?? 'No Data', 'Previous (%)', m.prevSummary.avg ?? 'No Data', 'Variance (pp)', m.variance ?? '—', 'Autofails', m.summary.autofails],
+    [],
+  ];
+  if (!rows.length) meta.push([NO_DATA]);
+  const lines = [...meta, header, ...rows].map((r) => r.map(esc).join(','));
   return new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
 }
 
@@ -91,6 +102,7 @@ export async function reportToXlsx(m: ReportModel): Promise<Blob> {
   sum.addRow(['Average QA score (%)', m.summary.avg ?? 'No Data', m.prevSummary.avg ?? 'No Data', m.variance === null ? '—' : fmtPp(m.variance)]);
   sum.addRow(['Autofails', m.summary.autofails, m.prevSummary.autofails, m.summary.autofails - m.prevSummary.autofails]);
   sum.addRow(['FCR rate (%)', m.summary.fcrRate ?? 'No Data', m.prevSummary.fcrRate ?? 'No Data', fmtPp(variance(m.summary.fcrRate, m.prevSummary.fcrRate))]);
+  sum.addRow(['Final rating (policy)', RATING_LABEL[finalRating(m.summary, m.settings)], RATING_LABEL[finalRating(m.prevSummary, m.settings)]]);
   sum.addRow(['QA target (%)', m.settings.qa_target.score]);
   sum.addRow([]);
   sum.addRow(['Weekly trend']).font = { bold: true };
@@ -111,21 +123,26 @@ export async function reportToXlsx(m: ReportModel): Promise<Blob> {
 
   const ps = wb.addWorksheet('Parameters');
   ps.columns = [{ header: 'Task Type', width: 16 }, { header: 'Parameter', width: 44 }, { header: 'Max Score', width: 10 }, { header: 'Times Evaluated', width: 14 },
-    { header: 'Deductions', width: 11 }, { header: 'Points Earned', width: 13 }, { header: 'Points Possible', width: 14 }, { header: '% Achieved', width: 11 }];
-  m.params.forEach((p) => ps.addRow([p.taskTypeName, p.parameter.name, p.parameter.max_score, p.evaluated, p.deductions, p.earned, p.max, p.pct]));
+    { header: 'Deductions', width: 11 }, { header: 'Points Earned', width: 13 }, { header: 'Points Possible', width: 14 }, { header: '% Achieved', width: 11 },
+    { header: 'Previous Period %', width: 15 }, { header: 'Variance (pp)', width: 12 }];
+  m.params.forEach((p) => ps.addRow([p.taskTypeName, p.parameter.name, p.parameter.max_score, p.evaluated, p.deductions, p.earned, p.max, p.pct,
+    prevPct(m, p) ?? 'No Data', variance(p.pct, prevPct(m, p)) ?? '—']));
+  if (!m.params.length) ps.addRow([NO_DATA]);
   headStyle(ps);
 
   const { header, rows } = taskRows(m);
   const ts = wb.addWorksheet('Task Details');
   ts.addRow(header);
   rows.forEach((r) => ts.addRow(r));
+  if (!rows.length) ts.addRow([NO_DATA]);
   ts.columns.forEach((c, i) => { c.width = i === header.length - 1 ? 80 : i === 8 ? 40 : 14; });
   headStyle(ts);
 
   const as = wb.addWorksheet('Appeals');
   as.columns = [{ header: 'Reference', width: 18 }, { header: 'CAM', width: 22 }, { header: 'Task ID', width: 38 }, { header: 'Audit Week', width: 10 },
-    { header: 'Disputed', width: 30 }, { header: 'Status', width: 22 }, { header: 'Submitted', width: 18 }, { header: 'Decided', width: 18 }, { header: 'Resolution', width: 60 }];
-  m.appeals.forEach((a) => as.addRow([a.reference, a.cam_name, a.task_id, a.period_short_label, a.parameters_label ?? '', APPEAL_STATUS_LABEL[a.status],
+    { header: 'Disputed', width: 30 }, { header: 'Lead Recommendation', width: 22 }, { header: 'Status', width: 22 }, { header: 'Submitted', width: 18 }, { header: 'Decided', width: 18 }, { header: 'Resolution', width: 60 }];
+  m.appeals.forEach((a) => as.addRow([a.reference, a.cam_name, a.task_id, a.period_short_label, a.parameters_label ?? '',
+    a.lead_recommendation ? RECOMMENDATION_LABEL[a.lead_recommendation] : '', APPEAL_STATUS_LABEL[a.status],
     fmtDateTime(a.submitted_at), fmtDateTime(a.decided_at), a.resolution_note ?? '']));
   headStyle(as);
 
@@ -176,20 +193,21 @@ export async function reportToPdf(m: ReportModel): Promise<Blob> {
     ['Variance', fmtPp(m.variance), 'percentage points'],
     ['Tasks audited', String(m.summary.tasks), `Previous ${m.prevSummary.tasks}`],
     ['Autofails', String(m.summary.autofails), m.summary.autofailRate === null ? '—' : `${m.summary.autofailRate.toFixed(2)}% of tasks`],
-    ['FCR rate', fmtPct(m.summary.fcrRate), `${m.summary.fcrYes}/${m.summary.fcrTotal} tasks`],
+    ['Final rating', RATING_LABEL[finalRating(m.summary, m.settings)], 'policy rating (see note)'],
   ];
   const bw = (W - 2 * M - 4 * 8) / 5;
   kpis.forEach(([l, v, s], i) => {
     const x = M + i * (bw + 8);
     doc.setDrawColor(218, 225, 225); doc.setFillColor(248, 250, 250); doc.roundedRect(x, y, bw, 58, 4, 4, 'FD');
     doc.setTextColor(...mutedC); doc.setFontSize(7.5); doc.text(l.toUpperCase(), x + 8, y + 14);
-    doc.setTextColor(...inkC); doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.text(v, x + 8, y + 34);
+    doc.setTextColor(...inkC); doc.setFont('helvetica', 'bold'); doc.setFontSize(v.length > 10 ? 10.5 : 15); doc.text(v, x + 8, y + 34);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(...mutedC); doc.text(s, x + 8, y + 49);
   });
   y += 76;
   doc.setFontSize(8); doc.setTextColor(...mutedC);
-  doc.text(`QA target ${m.settings.qa_target.score}%. Colour bands: on target ≥ ${m.settings.thresholds.green}%, needs attention ≥ ${m.settings.thresholds.amber}%, otherwise below target. Variance is shown in percentage points.`, M, y, { maxWidth: W - 2 * M });
-  y += 18;
+  const note = doc.splitTextToSize(pdfSafe(`Final rating: Meets standard = average >= ${m.settings.qa_target.score}% target and autofail rate <= ${m.settings.qa_target.autofail_rate_max}%; Needs improvement = average >= ${m.settings.thresholds.amber}%; otherwise Below standard. FCR rate ${fmtPct(m.summary.fcrRate)} (${m.summary.fcrYes}/${m.summary.fcrTotal}). QA target ${m.settings.qa_target.score}%. Colour bands: on target ≥ ${m.settings.thresholds.green}%, needs attention ≥ ${m.settings.thresholds.amber}%, otherwise below target. Variance is shown in percentage points.`), W - 2 * M);
+  doc.text(note, M, y);
+  y += note.length * 10 + 14;
 
   const section = (t: string) => {
     if (y > 740) { doc.addPage(); y = 50; }
@@ -203,7 +221,13 @@ export async function reportToPdf(m: ReportModel): Promise<Blob> {
     y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 18;
   };
 
+  if (!m.evaluations.length) {
+    doc.setFillColor(255, 247, 230); doc.setDrawColor(230, 200, 140); doc.roundedRect(M, y, W - 2 * M, 34, 4, 4, 'FD');
+    doc.setTextColor(...inkC); doc.setFontSize(10); doc.text(NO_DATA, M + 10, y + 21); y += 50;
+  }
+
   section('Weekly performance trend');
+  y = drawTrend(doc, m, M, y + 6, W - 2 * M, 130, { teal, inkC, mutedC });
   table(['Week', ...m.trend.map((t) => t.label)], [
     ['Average', ...m.trend.map((t) => (t.avg === null ? 'No Data' : t.avg.toFixed(2)))],
     ['Tasks', ...m.trend.map((t) => t.tasks)],
@@ -218,8 +242,9 @@ export async function reportToPdf(m: ReportModel): Promise<Blob> {
   }
 
   section('Parameter-level results');
-  table(['Task type', 'Parameter', 'Max', 'Evaluated', 'Deductions', 'Earned / Possible', '% Achieved'],
-    m.params.map((p) => [p.taskTypeName, p.parameter.name, p.parameter.max_score, p.evaluated, p.deductions, `${p.earned} / ${p.max}`, fmtPct(p.pct)]));
+  if (m.params.length) table(['Task type', 'Parameter', 'Max', 'Evaluated', 'Deductions', 'Earned / Possible', '% Achieved', 'Previous %', 'Variance'],
+    m.params.map((p) => [p.taskTypeName, p.parameter.name, p.parameter.max_score, p.evaluated, p.deductions, `${p.earned} / ${p.max}`, fmtPct(p.pct), fmtPct(prevPct(m, p)), fmtPp(variance(p.pct, prevPct(m, p)))]));
+  else { doc.setFontSize(9); doc.setTextColor(...mutedC); doc.text(NO_DATA, M, y + 6); y += 24; }
 
   if (m.insights) {
     section('Strengths and improvement areas');
@@ -234,6 +259,7 @@ export async function reportToPdf(m: ReportModel): Promise<Blob> {
   }
 
   section(`Task-level audit details (${m.evaluations.length})`);
+  if (!m.evaluations.length) { doc.setFontSize(9); doc.setTextColor(...mutedC); doc.text(NO_DATA, M, y + 6); y += 24; }
   if (m.evaluations.length) {
     table(['Week', 'Audited', m.kind === 'cam' ? 'Type' : 'CAM', 'Task ID', 'Score', 'AF', 'Deducted parameters', 'QA feedback'],
       m.evaluations.map((e) => [e.period_short_label, fmtDate(e.audited_at), m.kind === 'cam' ? e.task_type_name : `${e.cam_name}\n${e.task_type_name}`,
@@ -246,8 +272,10 @@ export async function reportToPdf(m: ReportModel): Promise<Blob> {
 
   section(`Appeals (${m.appeals.length})`);
   if (m.appeals.length) {
-    table(['Reference', 'CAM', 'Disputed', 'Status', 'Submitted', 'Resolution'],
-      m.appeals.map((a) => [a.reference, a.cam_name, a.parameters_label ?? '', APPEAL_STATUS_LABEL[a.status], fmtDate(a.submitted_at), a.resolution_note ?? '']));
+    table(['Reference', 'CAM / Task', 'Disputed', 'Lead recommendation', 'Status', 'Submitted', 'Decided', 'Resolution'],
+      m.appeals.map((a) => [a.reference, `${a.cam_name}\n${a.task_id.slice(0, 8)} · ${a.period_short_label}`, a.parameters_label ?? '',
+        a.lead_recommendation ? RECOMMENDATION_LABEL[a.lead_recommendation] : '—', APPEAL_STATUS_LABEL[a.status], fmtDate(a.submitted_at), fmtDate(a.decided_at), a.resolution_note ?? '']),
+      { styles: { fontSize: 7, cellPadding: 3 } });
   } else { doc.setFontSize(9); doc.setTextColor(...mutedC); doc.text('No appeals for this period.', M, y + 6); }
 
   // footer on every page
@@ -260,6 +288,40 @@ export async function reportToPdf(m: ReportModel): Promise<Blob> {
     doc.text(`Page ${i} of ${pages}`, W - M, 820, { align: 'right' });
   }
   return doc.output('blob');
+}
+
+type RGB = [number, number, number];
+/** Line chart of weekly averages with the QA target; weeks without audits are gaps labelled "No Data". Returns the next y. */
+function drawTrend(doc: import('jspdf').jsPDF, m: ReportModel, x: number, y: number, w: number, h: number, c: { teal: RGB; inkC: RGB; mutedC: RGB }) {
+  const pts = m.trend;
+  if (!pts.length) return y;
+  const vals = pts.map((p) => p.avg).filter((v): v is number => v !== null);
+  const lo = Math.max(0, Math.floor(Math.min(m.settings.thresholds.amber - 5, ...vals) / 5) * 5);
+  const left = x + 28; const right = x + w - 6; const top = y + 6; const bottom = y + h - 18;
+  const px = (i: number) => (pts.length === 1 ? (left + right) / 2 : left + (i * (right - left)) / (pts.length - 1));
+  const py = (v: number) => bottom - ((v - lo) / (100 - lo)) * (bottom - top);
+  doc.setFontSize(7); doc.setLineWidth(0.4);
+  for (let v = lo; v <= 100; v += lo >= 70 ? 5 : 10) {
+    doc.setDrawColor(225, 230, 230); doc.line(left, py(v), right, py(v));
+    doc.setTextColor(...c.mutedC); doc.text(`${v}%`, x, py(v) + 2.5);
+  }
+  const t = py(m.settings.qa_target.score);
+  doc.setDrawColor(30, 130, 70); doc.setLineDashPattern([3, 3], 0); doc.line(left, t, right, t); doc.setLineDashPattern([], 0);
+  doc.setTextColor(30, 130, 70); doc.text(`Target ${m.settings.qa_target.score}%`, right - 44, t - 3);
+  doc.setDrawColor(...c.teal); doc.setLineWidth(1.4);
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1].avg; const b = pts[i].avg;
+    if (a !== null && b !== null) doc.line(px(i - 1), py(a), px(i), py(b));
+  }
+  doc.setFillColor(...c.teal);
+  pts.forEach((p, i) => {
+    if (p.avg !== null) doc.circle(px(i), py(p.avg), 2, 'F');
+    doc.setTextColor(...(p.avg === null ? c.mutedC : c.inkC));
+    doc.text(p.label, px(i), bottom + 10, { align: 'center' });
+    if (p.avg === null) doc.text('No Data', px(i), bottom - 4, { align: 'center' });
+  });
+  doc.setLineWidth(0.5);
+  return y + h + 4;
 }
 
 export function saveBlob(blob: Blob, name: string) {

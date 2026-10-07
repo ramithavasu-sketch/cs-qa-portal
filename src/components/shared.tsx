@@ -6,19 +6,21 @@ import { Button, Card, EmptyState, Modal, Pill, ScoreBadge, Table, td, th, InfoT
 import { ParameterBars } from './charts';
 import { fmtDate, fmtPct, parameterStats, variance, type Insights, type ParamStat } from '../lib/metrics';
 import { downloadReport, type ReportModel } from '../lib/report';
-import { isDemo } from '../data';
+import { isDemo, repo } from '../data';
 import type { Evaluation, Parameter, PortalSettings } from '../lib/types';
 
-export function DownloadMenu({ build, label = 'Download Report' }: { build: () => ReportModel | null; label?: string }) {
+export function DownloadMenu({ build, label = 'Download Report', empty }: { build: () => ReportModel | null; label?: string; empty?: boolean }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const toast = useToast();
   const go = async (f: 'pdf' | 'xlsx' | 'csv') => {
+    if (empty) { toast('No QA evaluations are available for this reporting period, so there is nothing to download.', 'info'); setOpen(false); return; }
     const m = build();
     if (!m) return;
     setBusy(f);
     try {
       await downloadReport(m, f);
+      void repo.logExport({ scope: m.subject, period: m.periodLabel, format: f });
       toast(isDemo ? `${f.toUpperCase()} report generated. If no file appears, your viewer blocks downloads (the hosted demo sandbox does); the deployed portal downloads normally.` : `${f.toUpperCase()} report downloaded.`, isDemo ? 'info' : 'good');
     } catch (e) { toast(e instanceof Error ? e.message : String(e), 'bad'); } finally { setBusy(null); setOpen(false); }
   };
@@ -27,7 +29,7 @@ export function DownloadMenu({ build, label = 'Download Report' }: { build: () =
       <Button onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} loading={!!busy}><Download className="h-4 w-4" />{label}<ChevronDown className="h-3.5 w-3.5" /></Button>
       {open && (
         <div role="menu" className="absolute right-0 top-10 z-30 w-64 rounded-lg border border-line bg-surface p-1 shadow-xl">
-          {([['pdf', 'PDF report', 'Formatted report for sharing or records'], ['xlsx', 'Excel workbook', 'Summary, parameters, task details, appeals'], ['csv', 'CSV (task rows)', 'Raw task-level data']] as const).map(([f, t, d]) => (
+          {([['pdf', 'PDF report', 'Formatted report for sharing or records'], ['xlsx', 'Excel workbook', 'Summary, parameters, task details, appeals'], ['csv', 'CSV (task rows)', 'Report summary header + raw task-level data']] as const).map(([f, t, d]) => (
             <button key={f} role="menuitem" onClick={() => go(f)} className="block w-full rounded px-3 py-2 text-left hover:bg-sunken">
               <div className="text-[13px] font-medium">{t}</div><div className="text-[12px] text-muted">{d}</div>
             </button>
@@ -72,11 +74,11 @@ export function ParameterAnalysis({ cur, prev, parameters, taskTypeNames, settin
           <thead><tr>
             <th className={th}>Parameter</th><th className={th + ' text-right'}>Max</th><th className={th + ' text-right'}>Earned</th>
             <th className={th + ' text-right'}>% Achieved</th><th className={th + ' text-right'}>Previous</th><th className={th + ' text-right'}>Variance</th>
-            <th className={th + ' text-right'}>Evaluated</th><th className={th + ' text-right'}>Deductions</th><th className={th}></th>
+            <th className={th + ' text-right'}>Evaluated</th><th className={th + ' text-right'}>Deductions</th><th className={th}>Related QA feedback</th><th className={th}></th>
           </tr></thead>
           <tbody>
             {sections.map((sec) => (
-              <FragmentRows key={sec} section={sec} colSpan={9}>
+              <FragmentRows key={sec} section={sec} colSpan={10}>
                 {list.filter((s) => (s.parameter.section ?? '') === sec).map((s) => {
                   const p = prevStats.get(s.parameter.id);
                   return (
@@ -89,7 +91,8 @@ export function ParameterAnalysis({ cur, prev, parameters, taskTypeNames, settin
                       <td className={td + ' text-right'}><Variance value={p?.evaluated && s.evaluated ? variance(s.pct, p.pct) : null} /></td>
                       <td className={td + ' text-right tnum'}>{s.evaluated}</td>
                       <td className={td + ' text-right tnum'}>{s.deductions ? <span className="font-semibold text-bad">{s.deductions}</span> : 0}</td>
-                      <td className={td}>{s.deductions > 0 && <button className="text-[12.5px] text-brand hover:underline" onClick={() => setDrill(s)}>View tasks</button>}</td>
+                      <td className={td + ' max-w-[260px] text-[12.5px] text-muted'}>{relatedFeedback(s)}</td>
+                      <td className={td + ' whitespace-nowrap'}>{s.evaluated > 0 && <button className="text-[12.5px] text-brand hover:underline" onClick={() => setDrill(s)}>View tasks</button>}</td>
                     </tr>
                   );
                 })}
@@ -101,16 +104,17 @@ export function ParameterAnalysis({ cur, prev, parameters, taskTypeNames, settin
       <Modal open={!!drill} onClose={() => setDrill(null)} title={drill ? `${drill.parameter.name} · ${drill.taskTypeName}` : ''} wide>
         {drill && (
           <div className="flex flex-col gap-3">
-            <p className="text-[13px] text-muted">{drill.deductions} deduction(s) across {drill.evaluated} evaluated task(s). QA feedback is shown exactly as recorded.</p>
-            {drill.refs.length === 0 && <p className="text-[13px]">No deductions on this parameter in the selected period.</p>}
-            {drill.refs.map((r) => (
+            <p className="text-[13px] text-muted">{drill.deductions} deduction(s) across {drill.evaluated} evaluated task(s). Tasks with deductions are listed first. QA feedback is shown exactly as recorded.</p>
+            {drill.deductions === 0 && <p className="text-[13px]">No deductions on this parameter in the selected period.</p>}
+            {[...drill.refs].sort((a, b) => Number(b.deducted) - Number(a.deducted) || b.auditedAt.localeCompare(a.auditedAt)).map((r) => (
               <div key={r.evaluationId} className="rounded border border-line p-3">
                 <div className="flex flex-wrap items-center gap-2 text-[12.5px]">
                   <Pill>{r.periodLabel}</Pill><span className="text-muted">{fmtDate(r.auditedAt)}</span>
                   <span className="font-mono text-[12px]">{r.taskId.slice(0, 8)}</span>
-                  <span className="font-semibold text-bad tnum">{r.earned}/{r.max}</span>
+                  <span className={clsx('font-semibold tnum', r.deducted ? 'text-bad' : 'text-good')}>{r.earned}/{r.max}{r.deducted ? ' · deduction' : ' · full marks'}</span>
                   <Link to={`/evaluations/${r.evaluationId}`} className="ml-auto text-brand hover:underline">Open evaluation</Link>
                 </div>
+                {r.remarks && <p className="mt-2 text-[13px]"><span className="eyebrow mr-1">Parameter remark</span>{r.remarks}</p>}
                 {r.feedback && <p className="mt-2 text-[13px]"><span className="eyebrow mr-1">QA feedback</span>{r.feedback}</p>}
               </div>
             ))}
@@ -119,6 +123,13 @@ export function ParameterAnalysis({ cur, prev, parameters, taskTypeNames, settin
       </Modal>
     </div>
   );
+}
+/** Short preview of the recorded QA feedback on tasks where this parameter lost points. */
+function relatedFeedback(s: ParamStat) {
+  const notes = s.refs.filter((r) => r.deducted).map((r) => r.remarks || r.feedback).filter((x): x is string => !!x);
+  if (!s.deductions) return <span className="text-faint">—</span>;
+  if (!notes.length) return <span className="text-faint">No feedback recorded</span>;
+  return <span title={notes[0]}><span className="line-clamp-2">{notes[0]}</span>{notes.length > 1 && <span className="text-faint"> +{notes.length - 1} more</span>}</span>;
 }
 function FragmentRows({ section, colSpan, children }: { section: string; colSpan: number; children: React.ReactNode }) {
   return (<>{section && <tr><td colSpan={colSpan} className="bg-sunken/40 px-3 py-1.5 text-[11.5px] font-semibold uppercase tracking-wide text-muted">{section}</td></tr>}{children}</>);
@@ -162,7 +173,7 @@ export function InsightsPanel({ insights }: { insights: Insights }) {
   );
 }
 
-export function EvaluationsTable({ evals, settings, showCam = false, pageSize = 15, appealedIds }: { evals: Evaluation[]; settings: PortalSettings; showCam?: boolean; pageSize?: number; appealedIds?: Set<string> }) {
+export function EvaluationsTable({ evals, settings, showCam = false, pageSize = 15, appealedIds, canAppeal }: { evals: Evaluation[]; settings: PortalSettings; showCam?: boolean; pageSize?: number; appealedIds?: Set<string>; canAppeal?: (e: Evaluation) => boolean }) {
   const [page, setPage] = useState(1);
   const pages = Math.max(1, Math.ceil(evals.length / pageSize));
   const rows = evals.slice((page - 1) * pageSize, page * pageSize);
@@ -193,7 +204,8 @@ export function EvaluationsTable({ evals, settings, showCam = false, pageSize = 
                 <td className={td + ' max-w-[360px] text-[12.5px] text-muted'}><span className="line-clamp-2">{e.feedback ?? '—'}</span></td>
                 <td className={td + ' whitespace-nowrap'}>
                   <Link to={`/evaluations/${e.id}`} className="text-[12.5px] font-medium text-brand hover:underline">Details</Link>
-                  {appealedIds?.has(e.id) && <div className="text-[11px] text-muted">Appealed</div>}
+                  {appealedIds?.has(e.id) ? <div className="text-[11px] text-muted">Appealed</div>
+                    : canAppeal?.(e) && <div><Link to={`/evaluations/${e.id}?appeal=1`} className="text-[12px] text-brand hover:underline">Raise appeal</Link></div>}
                 </td>
               </tr>
             );

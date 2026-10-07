@@ -14,7 +14,30 @@ export const METRIC_DEFINITIONS: Record<string, string> = {
   'Repeat error': 'The same parameter was deducted in consecutive audit weeks (SOP: 2 weeks = flag, 3 weeks = coaching with Team Lead).',
   'Period': 'Weeks are the QA audit weeks (e.g. WK-38). A week belongs to the month/quarter in which it starts. The comparison period is the immediately preceding period of the same length.',
   'No Data': 'No evaluations exist for that period. It is never treated as a zero score.',
+  'Tasks Audited': 'Number of tasks evaluated by QA in the selected period (after filters).',
+  'CAMs Evaluated': 'CAMs with at least one audited task in the selected period.',
+  'Meeting Target': 'CAMs whose average QA score for the period is at or above the configured QA target.',
+  'Needs Attention': 'CAMs with at least one audited task whose average is below the amber threshold, who had an autofail, or whose average dropped by 5 pp or more.',
+  'Appeals': 'Appeals submitted (drafts excluded). Pending = still with the Team Lead, QA or awaiting information. Resolved = approved, partially approved, rejected or closed.',
+  'Final Rating': 'Policy rating for the period, separate from the raw average: Meets standard = average at or above the QA target and autofail rate within the allowed maximum; Needs improvement = average in the amber band, or on target but over the autofail limit; otherwise Below standard.',
+  'Score Band': 'Colours compare a score with the configured QA standards: green = on target (≥ green threshold), amber = needs attention, red = below target. The score itself is always shown.',
 };
+
+/**
+ * Policy-based final rating for a period, kept separate from the raw average score:
+ * "Meets standard" needs the average at or above the QA target AND the autofail rate
+ * within the allowed maximum; "Needs improvement" is an average in the amber band (or
+ * on target but over the autofail limit); otherwise "Below standard".
+ */
+export type Rating = 'meets' | 'improve' | 'below' | 'none';
+export const RATING_LABEL: Record<Rating, string> = { meets: 'Meets standard', improve: 'Needs improvement', below: 'Below standard', none: 'No Data' };
+export function finalRating(s: { avg: number | null; autofailRate: number | null }, st: PortalSettings): Rating {
+  if (s.avg === null) return 'none';
+  const afOk = (s.autofailRate ?? 0) <= st.qa_target.autofail_rate_max;
+  if (s.avg >= st.qa_target.score && afOk) return 'meets';
+  if (s.avg >= st.thresholds.amber) return 'improve';
+  return 'below';
+}
 
 export type Band = 'green' | 'amber' | 'red' | 'none';
 export function band(score: number | null | undefined, s: PortalSettings): Band {
@@ -148,10 +171,21 @@ export function weeklyTrend(evals: Evaluation[], periods: Period[]): TrendPoint[
   });
 }
 
+/** Month-by-month trend; a week belongs to the month in which it starts (same rule as period selection). */
+export function monthlyTrend(evals: Evaluation[], periods: Period[]): TrendPoint[] {
+  const keys = [...new Set([...periods].sort(byStart).map((p) => monthKey(p.start_date)))];
+  return keys.map((k) => {
+    const ids = new Set(periods.filter((p) => monthKey(p.start_date) === k).map((p) => p.id));
+    const s = summarize(evals.filter((e) => ids.has(e.period_id)));
+    return { periodId: k, label: monthLabel(k), avg: s.avg, tasks: s.tasks, autofails: s.autofails, start: k + '-01' };
+  });
+}
+export const periodMonthKeys = (periods: Period[]) => [...new Set(periods.map((p) => monthKey(p.start_date)))];
+
 // ---------------------------------------------------------------------------
 // Parameter analysis
 // ---------------------------------------------------------------------------
-export interface FeedbackRef { evaluationId: string; taskId: string; periodLabel: string; auditedAt: string; earned: number | null; max: number; feedback: string | null }
+export interface FeedbackRef { evaluationId: string; taskId: string; periodLabel: string; auditedAt: string; earned: number | null; max: number; feedback: string | null; remarks: string | null; deducted: boolean }
 export interface ParamStat {
   parameter: Parameter; taskTypeName: string; evaluated: number; deductions: number; earned: number; max: number;
   pct: number | null; pointsLost: number; refs: FeedbackRef[];
@@ -169,11 +203,12 @@ export function parameterStats(evals: Evaluation[], parameters: Parameter[], tas
       st.evaluated += 1;
       st.earned += Number(s.earned);
       st.max += Number(s.max_score);
-      if (Number(s.earned) < Number(s.max_score)) {
+      const deducted = Number(s.earned) < Number(s.max_score);
+      if (deducted) {
         st.deductions += 1;
         st.pointsLost += Number(s.max_score) - Number(s.earned);
-        st.refs.push({ evaluationId: e.id, taskId: e.task_id, periodLabel: e.period_short_label, auditedAt: e.audited_at, earned: s.earned, max: s.max_score, feedback: e.feedback });
       }
+      st.refs.push({ evaluationId: e.id, taskId: e.task_id, periodLabel: e.period_short_label, auditedAt: e.audited_at, earned: s.earned, max: s.max_score, feedback: e.feedback, remarks: s.remarks, deducted });
     }
   }
   for (const st of map.values()) st.pct = st.max ? round2((100 * st.earned) / st.max) : null;
@@ -266,6 +301,9 @@ export interface CamRow {
 
 const OPEN: Appeal['status'][] = ['draft', 'pending_lead_review', 'returned_to_cam', 'pending_qa_review', 'pending_additional_info'];
 export const isOpenAppeal = (a: Appeal) => OPEN.includes(a.status);
+/** Submitted and still in review (drafts excluded). */
+export const isPendingAppeal = (a: Appeal) => a.status !== 'draft' && OPEN.includes(a.status);
+export const isResolvedAppeal = (a: Appeal) => ['approved', 'partially_approved', 'rejected', 'closed'].includes(a.status);
 
 export function camRows(
   cams: Employee[], teams: Team[], employees: Employee[], cur: Evaluation[], prev: Evaluation[],
@@ -300,6 +338,21 @@ export function camRows(
     };
   });
 }
+
+/** Client-side estimate of the appeal deadline (the server re-checks it on submit). */
+export function appealDeadlineOf(publishedAt: string | null, s: PortalSettings): Date | null {
+  if (!publishedAt) return null;
+  const w = s.appeal_window;
+  const d = new Date(publishedAt);
+  if (!w.business_days) return new Date(d.getTime() + w.days * 86400000);
+  let added = 0;
+  while (added < w.days) { d.setDate(d.getDate() + 1); if (d.getDay() !== 0 && d.getDay() !== 6) added += 1; }
+  return d;
+}
+export const appealWindowOpen = (e: Evaluation, s: PortalSettings) => {
+  const d = e.period_status === 'published' ? appealDeadlineOf(e.published_at, s) : null;
+  return !!d && Date.now() <= d.getTime();
+};
 
 export const APPEAL_STATUS_LABEL: Record<Appeal['status'], string> = {
   draft: 'Draft',

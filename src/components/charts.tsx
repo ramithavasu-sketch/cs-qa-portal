@@ -3,8 +3,10 @@ import {
   Bar, BarChart, CartesianGrid, Cell, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis, LabelList,
 } from 'recharts';
 import type { TrendPoint, ParamStat } from '../lib/metrics';
-import { fmtPct } from '../lib/metrics';
+import { fmtPct, monthlyTrend, periodMonthKeys, weeklyTrend } from '../lib/metrics';
+import type { Evaluation, Period } from '../lib/types';
 import type { PortalSettings } from '../lib/types';
+import { Tabs } from './ui';
 
 function readVar(name: string) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -36,10 +38,10 @@ export function TrendChart({ points, settings, selectedIds = [], height = 260 }:
   const data = points.map((p) => ({ ...p, value: p.avg, selected: selectedIds.includes(p.periodId) }));
   const values = points.map((p) => p.avg).filter((v): v is number => v !== null);
   const min = Math.max(0, Math.floor(Math.min(settings.thresholds.amber - 5, ...values) / 5) * 5);
-  if (!points.length) return null;
+  if (!points.length || points.every((p) => p.avg === null)) return <p className="py-10 text-center text-[13px] text-muted">No Data — no QA evaluations in the weeks shown.</p>;
   return (
     <div>
-      <div style={{ height }} role="img" aria-label={`Weekly QA score trend: ${points.map((p) => `${p.label} ${p.avg === null ? 'No Data' : p.avg.toFixed(2) + '%'}`).join(', ')}`}>
+      <div style={{ height }} role="img" aria-label={`QA score trend: ${points.map((p) => `${p.label} ${p.avg === null ? 'No Data' : p.avg.toFixed(2) + '%'}`).join(', ')}`}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 16, right: 16, bottom: 4, left: -8 }}>
             <CartesianGrid vertical={false} stroke={c.line} />
@@ -69,6 +71,20 @@ export function TrendChart({ points, settings, selectedIds = [], height = 260 }:
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+/** Trend chart with a Weekly / Monthly switch. Months use the same week-to-month rule as period selection. */
+export function TrendSwitch({ history, weeks, selected, settings }: { history: Evaluation[]; weeks: Period[]; selected: Period[]; settings: PortalSettings }) {
+  const [mode, setMode] = useState<'week' | 'month'>('week');
+  const points = mode === 'week' ? weeklyTrend(history, weeks) : monthlyTrend(history, weeks);
+  const sel = mode === 'week' ? selected.map((p) => p.id) : periodMonthKeys(selected);
+  return (
+    <div className="flex flex-col gap-2">
+      <Tabs value={mode} onChange={setMode} tabs={[{ value: 'week', label: 'Weekly' }, { value: 'month', label: 'Monthly' }]} />
+      <TrendChart points={points} settings={settings} selectedIds={sel} />
+      {mode === 'month' && <p className="text-[12px] text-muted">Months shown are those covered by the last {weeks.length} audit weeks. A week counts in the month it starts.</p>}
     </div>
   );
 }

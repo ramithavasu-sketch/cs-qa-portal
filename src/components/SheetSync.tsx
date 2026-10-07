@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { RefreshCw, Link2 } from 'lucide-react';
 import { useApp, useRef_ } from '../app/context';
-import { repo, isDemo, isLocal } from '../data';
+import { repo, isDemo, isLocal, isGoogle } from '../data';
+import { callServer } from '../data/googleRepo';
 import { Button, Card, ErrorBox, Field, Pill, Table, td, th, inputCls, useToast } from './ui';
 import { GOOGLE_CLIENT_ID, hasGoogleToken, syncSources, type SourceResult } from '../lib/googleSheets';
 import { fmtDateTime } from '../lib/metrics';
@@ -21,7 +22,28 @@ export function useSheetSync() {
     setRunning(scope);
     try {
       let rows: { label: string; text: string; error?: string }[];
-      if (repo.mode === 'supabase') {
+      if (isGoogle) {
+        // one sheet per request, so each stays inside Google's 6-minute limit
+        rows = [];
+        for (const src of sources) {
+          const step = `(${rows.length + 1} of ${sources.length})`;
+          const t0 = Date.now();
+          setRunning(`Starting ${src.label}… ${step}`);
+          // show what Google is doing while we wait (the first sync of a big sheet can take a few minutes)
+          const poll = setInterval(async () => {
+            try {
+              const pr = await callServer<{ at: string; msg: string } | null>('syncProgress', []);
+              const secs = Math.round((Date.now() - t0) / 1000);
+              if (pr && Date.parse(pr.at) >= t0 - 5000) setRunning(`${pr.msg} ${step} · ${secs} s`);
+              else setRunning(`Waiting for Google… ${step} · ${secs} s`);
+            } catch { /* keep waiting */ }
+          }, 4000);
+          try {
+            const [r] = await repo.syncGoogleSheet([src.id]).finally(() => clearInterval(poll));
+            rows.push({ label: src.label, error: r?.error, text: !r ? 'Not synced' : r.error ? r.error : `${r.inserted ?? 0} new · ${r.duplicates ?? 0} already loaded · ${r.rejected ?? 0} rejected` });
+          } catch (e) { rows.push({ label: src.label, error: String((e as Error).message), text: String((e as Error).message) }); }
+        }
+      } else if (repo.mode === 'supabase') {
         const res = await repo.syncGoogleSheet(scope);
         rows = res.map((r) => ({ label: sources.find((s) => s.id === r.source)?.label ?? r.source, error: r.error,
           text: r.error ? r.error : `${r.inserted ?? 0} new · ${r.duplicates ?? 0} already loaded · ${r.rejected ?? 0} rejected` }));
@@ -74,7 +96,7 @@ export function SheetSourcesCard() {
   const [newUrl, setNewUrl] = useState(''); const [newTab, setNewTab] = useState(''); const [newKind, setNewKind] = useState<'live' | 'archive'>('archive');
   const sources = ref.settings.data_sources.sources;
   const last = readLast();
-  const canConnect = repo.mode === 'supabase' || (isLocal && !!GOOGLE_CLIENT_ID);
+  const canConnect = repo.mode === 'supabase' || isGoogle || (isLocal && !!GOOGLE_CLIENT_ID);
 
   const go = async (scope: 'live' | 'all') => {
     setErr(null); setResults(null);
@@ -101,6 +123,7 @@ export function SheetSourcesCard() {
         )}
         {isLocal && GOOGLE_CLIENT_ID && <p className="text-muted">Uses your own Google account (read-only). Google asks you to sign in the first time in each session.</p>}
         {repo.mode === 'supabase' && <p className="text-muted">The live sheet also syncs automatically every 30 minutes on the server.</p>}
+        {isGoogle && <p className="text-muted">Google reads the sheets as the portal owner, so every sheet must be shared with that account (Viewer is enough). The first sync of the live sheet can take a few minutes — progress shows below while it runs. New live weeks arrive as <strong>drafts</strong> — publish them on Reporting &amp; Settings. Archives are published at once. Turn on <em>Automatic jobs</em> there to re-sync the live sheet every 30 minutes.</p>}
         {running && running.length > 6 && <p className="text-info">{running}</p>}
         <Table>
           <thead><tr><th className={th}>Sheet / tab</th><th className={th}>Type</th><th className={th}>Last sync (this browser)</th><th className={th}>Use</th></tr></thead>
