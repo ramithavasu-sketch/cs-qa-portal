@@ -16,5 +16,7 @@ double_confirm_changes = true
 verify_jwt = true
 [functions.sheets-sync]
 verify_jwt = false   # accepts either a Super Admin JWT (checked in code) or the cron secret
+[functions.sheets-push]
+verify_jwt = false   # called by the sheet's Apps Script; checked with the SHEETS_PUSH_SECRET header
 [functions.send-email]
 verify_jwt = false

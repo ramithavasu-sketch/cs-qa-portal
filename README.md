@@ -230,6 +230,16 @@ Nothing reads Looker Studio directly. Scraping is fragile and would need your Go
 
 **CAM ↔ Lead mapping.** CAMs are matched by the email in the *CAM Name* column. On import, a CAM with no team is placed in the team whose Lead's name matches the row's *Lead Name* column. Create the teams and Leads first, under **Teams**, so this mapping works. Rows marked "No Longer With Company" or "Moved to Different Team" still import, and those CAMs remain unassigned until you assign them.
 
+**Option C: sync without a service account (Apps Script inside the sheet).** Use this when your company doesn't allow Google Cloud projects. A short script in the audit sheet sends new rows to the portal every 30 minutes, running as you. Nothing is made public.
+1. Make up a long random secret (at least 24 characters, letters and numbers). In Supabase, open **Edge Functions → Secrets → Add new secret**: name `SHEETS_PUSH_SECRET`, value = your secret.
+2. Deploy the receiving function once: `npx supabase functions deploy sheets-push --no-verify-jwt`
+3. Open the audit sheet → **Extensions → Apps Script**. Delete what's there, paste all of `scripts/apps-script/push-to-portal.gs`, and save.
+4. In the Apps Script editor: **Project Settings (gear) → Script Properties → Add script property**: `PORTAL_PUSH_SECRET` = the same secret.
+5. Check the `TABS` list at the top of the script (tab name `Form Responses 1` for the live form).
+6. Choose **pushToPortal** at the top and click **Run** → **Review permissions** → your account → **Allow**. The first run sends everything (it continues on the next run if it needs more than about 4 minutes).
+7. Choose **installTrigger** and click **Run** once. From now on it runs every 30 minutes. (**removeTrigger** stops it.)
+8. Results appear under **Data Import → Import history** (source *google_sheets*). For archive years, paste the same script into the archive sheet with its tab names and `source: 'archive'`, then run **pushToPortal** once (no trigger needed).
+
 ## 5a. Weekly report emails to CAMs
 
 Once a week is published, **QA administration → Weekly Report Emails** lists every CAM audited that week. The list shows the CAM's email (To), their Team Lead's email (CC), the number of tasks audited, and whether the email has been sent.
