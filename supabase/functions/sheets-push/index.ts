@@ -23,9 +23,11 @@ function sameSecret(a: string, b: string) {
 Deno.serve(async (req) => {
   try {
     if (req.method !== 'POST') throw new HttpError(405, 'Use POST');
-    const secret = Deno.env.get('SHEETS_PUSH_SECRET') ?? '';
+    // tolerate copy-paste slips: surrounding spaces, line breaks or quote marks
+    const clean = (v: string | null | undefined) => (v ?? '').trim().replace(/^['"]+|['"]+$/g, '').trim();
+    const secret = clean(Deno.env.get('SHEETS_PUSH_SECRET'));
     if (secret.length < 24) throw new HttpError(501, 'Sheet push is not configured: set the SHEETS_PUSH_SECRET function secret (at least 24 characters).');
-    if (!sameSecret(req.headers.get('x-push-secret') ?? '', secret)) throw new HttpError(401, 'Wrong or missing push secret');
+    if (!sameSecret(clean(req.headers.get('x-push-secret')), secret)) throw new HttpError(401, 'Wrong or missing push secret');
     if (Number(req.headers.get('content-length') ?? 0) > MAX_BYTES) throw new HttpError(413, 'Too much data in one request; send fewer rows at a time');
 
     const body = await req.json().catch(() => null) as { source?: string; label?: string; header?: unknown; rows?: unknown; first_row?: number } | null;

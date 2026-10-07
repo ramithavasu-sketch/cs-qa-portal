@@ -23,7 +23,7 @@ const OVERLAP = 50;           // re-send the last rows each time, in case recent
 const TIME_BUDGET_MS = 4.5 * 60 * 1000; // Apps Script stops at 6 minutes; continue on the next run
 
 function pushToPortal() {
-  const secret = PropertiesService.getScriptProperties().getProperty('PORTAL_PUSH_SECRET');
+  const secret = (PropertiesService.getScriptProperties().getProperty('PORTAL_PUSH_SECRET') || '').trim().replace(/^['"]+|['"]+$/g, '').trim();
   if (!secret) throw new Error('Add PORTAL_PUSH_SECRET under Project Settings → Script Properties first.');
   const started = Date.now();
   const book = SpreadsheetApp.getActiveSpreadsheet();
