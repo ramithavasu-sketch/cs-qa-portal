@@ -3,7 +3,7 @@ import { useApp, useAsync, useRef_ } from '../app/context';
 import { repo, isDemo } from '../data';
 import { PageHeader } from '../components/Layout';
 import { Button, Card, EmptyState, ErrorBox, Field, Loading, ScoreBadge, Tabs, Table, td, th, Variance, inputCls, inputBase, useToast, Pill } from '../components/ui';
-import { isReportee, buildSelection, fmtDate, fmtRange, isOpenAppeal, monthLabel, monthOptions, quarterOptions, summarize, variance, type PeriodMode } from '../lib/metrics';
+import { isQaRole, isReportee, buildSelection, fmtDate, fmtRange, isOpenAppeal, monthLabel, monthOptions, quarterOptions, summarize, variance, type PeriodMode } from '../lib/metrics';
 import { buildReport, downloadReport } from '../lib/report';
 import type { Appeal, Evaluation, Employee } from '../lib/types';
 
@@ -19,7 +19,7 @@ function useScopes() {
       out.push({ key: 'team', label: 'My whole team', kind: 'team', cams: camsOfLead(me!.id) });
       camsOfLead(me!.id).forEach((c) => out.push({ key: c.id, label: c.full_name, kind: 'cam', cams: [c] }));
     }
-    if (me!.role === 'super_admin') {
+    if (isQaRole(me!.role)) {
       out.push({ key: 'org', label: 'All teams (organisation)', kind: 'org', cams: ref.employees.filter(isReportee) });
       ref.employees.filter((e) => e.role === 'admin').forEach((l) => out.push({ key: 'lead:' + l.id, label: `Team of ${l.full_name}`, kind: 'team', cams: camsOfLead(l.id) }));
       ref.employees.filter(isReportee).forEach((c) => out.push({ key: c.id, label: c.full_name, kind: 'cam', cams: [c] }));
@@ -141,7 +141,7 @@ export function DownloadsPage() {
   const [err, setErr] = useState<unknown>(null);
   const scope = scopes.find((s) => s.key === scopeKey) ?? scopes[0];
   const [drafts, setDrafts] = useState(false);
-  const periods = me!.role === 'super_admin' && drafts ? ref.periods : ref.publishedPeriods;
+  const periods = isQaRole(me!.role) && drafts ? ref.periods : ref.publishedPeriods;
   const sel = buildSelection(periods, mode, mode === 'custom' ? `${from}..${to}` : mode === 'week' ? anchor : mode === 'month' ? (monthOptions(periods).includes(anchor) ? anchor : undefined) : (quarterOptions(periods).includes(anchor) ? anchor : undefined));
   const go = async () => {
     setBusy(true); setErr(null);
@@ -168,7 +168,7 @@ export function DownloadsPage() {
         <Card title="Report options">
           <div className="flex flex-col gap-4">
             <Field label="Report for" htmlFor="dl-scope"><select id="dl-scope" className={inputCls} value={scope.key} onChange={(e) => setScopeKey(e.target.value)}>{scopes.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}</select></Field>
-            {me!.role === 'super_admin' && <label htmlFor="dl-drafts" className="flex items-center gap-2 text-[13px]"><input id="dl-drafts" type="checkbox" checked={drafts} onChange={(e) => setDrafts(e.target.checked)} />Include unpublished (draft) weeks — QA only</label>}
+            {isQaRole(me!.role) && <label htmlFor="dl-drafts" className="flex items-center gap-2 text-[13px]"><input id="dl-drafts" type="checkbox" checked={drafts} onChange={(e) => setDrafts(e.target.checked)} />Include unpublished (draft) weeks — QA only</label>}
             <Field label="Period type" htmlFor="dl-mode"><select id="dl-mode" className={inputCls} value={mode} onChange={(e) => { const m = e.target.value as PeriodMode; setMode(m); setAnchor(m === 'week' ? periods[periods.length - 1]?.id ?? '' : m === 'month' ? monthOptions(periods)[0] : quarterOptions(periods)[0]); }}>
               <option value="week">Weekly</option><option value="month">Monthly</option><option value="quarter">Quarterly</option><option value="custom">Custom date range</option></select></Field>
             {mode === 'week' && <Field label="Audit week" htmlFor="dl-week"><select id="dl-week" className={inputCls} value={anchor} onChange={(e) => setAnchor(e.target.value)}>{[...periods].reverse().map((p) => <option key={p.id} value={p.id}>{p.short_label} · {fmtRange(p.start_date, p.end_date)}{p.status === 'draft' ? ' (draft)' : ''}</option>)}</select></Field>}

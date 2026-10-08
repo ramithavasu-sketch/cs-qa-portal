@@ -7,7 +7,7 @@ import { useApp, useAsync, useRef_ } from '../app/context';
 import { repo } from '../data';
 import { PageHeader } from '../components/Layout';
 import { Button, Card, ConfirmModal, EmptyState, ErrorBox, Field, Loading, Pill, ScoreBadge, StatusBadge, Table, td, th, inputCls, inputBase, textareaCls, useToast } from '../components/ui';
-import { APPEAL_STATUS_LABEL, RECOMMENDATION_LABEL, fmtDate, fmtDateTime, fmtPct } from '../lib/metrics';
+import { isQaRole, APPEAL_STATUS_LABEL, RECOMMENDATION_LABEL, fmtDate, fmtDateTime, fmtPct } from '../lib/metrics';
 import type { AppealDetail, AppealItem, LeadRecommendation } from '../lib/types';
 
 const ACTION_LABEL: Record<string, string> = {
@@ -118,7 +118,7 @@ export default function AppealDetailPage() {
                   </div>
                   <div className="text-[12px] text-muted">{ev.actor_name ?? 'System'} · {fmtDateTime(ev.created_at)}{ev.to_status && ev.from_status !== ev.to_status ? ` · → ${APPEAL_STATUS_LABEL[ev.to_status]}` : ''}</div>
                   {ev.comment && <p className="mt-1 whitespace-pre-wrap rounded bg-sunken px-2.5 py-1.5 text-[13px]">{ev.comment}</p>}
-                  {ev.visibility === 'internal' && ev.action === 'comment' && me!.role !== 'user' && (ev.actor_id === me!.id || me!.role === 'super_admin') && <ShareButton eventId={ev.id} onDone={bump} />}
+                  {ev.visibility === 'internal' && ev.action === 'comment' && me!.role !== 'user' && (ev.actor_id === me!.id || isQaRole(me!.role)) && <ShareButton eventId={ev.id} onDone={bump} />}
                 </li>
               ))}
             </ol>
@@ -173,7 +173,7 @@ function ActionPanel({ d, onDone, role, meId, pname, pmax }: { d: AppealDetail; 
   const a = d.appeal;
   const isCam = a.cam_id === meId;
   const isLead = role === 'admin';
-  const isQa = role === 'super_admin';
+  const isQa = isQaRole(role);
   const awaitingMe = (a.status === 'returned_to_cam' && isCam) || (a.status === 'pending_additional_info' && ((a.info_requested_from === 'cam' && isCam) || (a.info_requested_from === 'lead' && isLead)));
   return (
     <div className="flex flex-col gap-5">

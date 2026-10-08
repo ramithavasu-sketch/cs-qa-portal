@@ -106,7 +106,7 @@ function LoginForm() {
         <div className="mt-6 border-t border-line pt-4">
           <p className="eyebrow">Demo accounts (fictional)</p>
           <p className="mt-1 text-[12.5px] text-muted">Password for every demo account: <code className="font-mono text-ink">{DEMO_PASSWORD}</code>. Pick one to sign in as that role.</p>
-          {([['super_admin', 'QA team · Super Admin'], ['admin', 'Team Leads · Admin'], ['user', 'CAMs · User']] as const).map(([r, label]) => (
+          {([['super_admin', 'QA team · Super Admin'], ['evaluator', 'QA team · Evaluator'], ['admin', 'Team Leads · Admin'], ['user', 'CAMs · User']] as const).map(([r, label]) => (
             <div key={r} className="mt-3">
               <div className="text-[12px] font-semibold text-muted">{label}</div>
               <div className="mt-1 flex flex-wrap gap-1.5">

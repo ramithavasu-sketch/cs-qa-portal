@@ -3,7 +3,7 @@
 //  - Provider: EMAIL_PROVIDER=smtp (e.g. Google Workspace: smtp.gmail.com:465 with an app password,
 //    or smtp-relay.gmail.com) or EMAIL_PROVIDER=resend (HTTP API). Supabase blocks ports 25/587; use 465.
 import nodemailer from 'npm:nodemailer@6.9.16';
-import { cors, json, serviceClient, isCron, requireSuperAdmin } from '../_shared/auth.ts';
+import { cors, json, serviceClient, isCron, requireQa } from '../_shared/auth.ts';
 
 interface Msg { to: string; cc?: string | null; replyTo?: string | null; subject: string; text: string; html?: string | null }
 
@@ -36,7 +36,7 @@ async function sendOne(m: Msg) {
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   const admin = serviceClient();
-  try { if (!isCron(req)) await requireSuperAdmin(req, admin); } catch (e) { return json({ error: (e as Error).message }, 401); }
+  try { if (!isCron(req)) await requireQa(req, admin); } catch (e) { return json({ error: (e as Error).message }, 401); }
   const body = await req.json().catch(() => ({})) as { kind?: string };
   let q = admin.from('email_outbox').select('*').eq('status', 'queued').lt('attempts', 5).order('created_at').limit(100);
   if (body.kind) q = q.eq('kind', body.kind);

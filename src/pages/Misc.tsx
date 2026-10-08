@@ -8,15 +8,15 @@ import { PageHeader } from '../components/Layout';
 import { PeriodPicker, usePeriodSelection } from '../components/PeriodPicker';
 import { Button, Card, EmptyState, ErrorBox, Loading, inputBase } from '../components/ui';
 import { InsightsPanel, ParameterAnalysis } from '../components/shared';
-import { isReportee, buildInsights, fmtDateTime, METRIC_DEFINITIONS } from '../lib/metrics';
+import { isQaRole, isReportee, buildInsights, fmtDateTime, METRIC_DEFINITIONS } from '../lib/metrics';
 
 export function ParametersPage() {
   const { me } = useApp();
   const ref = useRef_();
-  const [sel, setSel, periods] = usePeriodSelection(me!.role === 'super_admin');
+  const [sel, setSel, periods] = usePeriodSelection(isQaRole(me!.role));
   const [cam, setCam] = useState(me!.role === 'user' ? me!.id : '');
   const data = useScopeData(sel, cam ? [cam] : undefined);
-  const cams = ref.employees.filter((e) => isReportee(e) && e.id !== me!.id && (me!.role === 'super_admin' || (me!.role === 'admin' && ref.teams.some((t) => t.id === e.team_id && t.lead_id === me!.id))));
+  const cams = ref.employees.filter((e) => isReportee(e) && e.id !== me!.id && (isQaRole(me!.role) || (me!.role === 'admin' && ref.teams.some((t) => t.id === e.team_id && t.lead_id === me!.id))));
   const insights = useMemo(() => buildInsights(data.cur, data.prev, data.history, data.historyWeeks, ref.parameters, ref.taskTypeNames, ref.settings), [data, ref]);
   return (
     <div className="flex flex-col gap-5">

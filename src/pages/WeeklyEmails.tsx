@@ -10,7 +10,7 @@ import { renderReportEmail } from '../lib/email';
 import type { PortalSettings, WeeklyEmailRow } from '../lib/types';
 
 export default function WeeklyEmailsPage() {
-  const { reloadRef, bump } = useApp();
+  const { reloadRef, bump, me } = useApp();
   const ref = useRef_();
   const toast = useToast();
   const [sp, setSp] = useSearchParams();
@@ -95,7 +95,7 @@ export default function WeeklyEmailsPage() {
         </Card>
       </div>
 
-      <TemplateEditor settings={s} onSaved={async () => { await reloadRef(); toast('Email template saved.'); }} />
+      {me?.role === 'super_admin' && <TemplateEditor settings={s} onSaved={async () => { await reloadRef(); toast('Email template saved.'); }} />}
 
       <ConfirmModal open={!!confirm} title="Send weekly report emails" confirmLabel={`Send ${confirm?.count ?? 0} email(s)`} onClose={() => setConfirm(null)}
         onConfirm={async () => {

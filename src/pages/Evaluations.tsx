@@ -8,14 +8,14 @@ import { PageHeader } from '../components/Layout';
 import { PeriodPicker, usePeriodSelection } from '../components/PeriodPicker';
 import { Button, Card, EmptyState, ErrorBox, Field, Loading, Modal, Pill, ScoreBadge, StatusBadge, Table, td, th, inputCls, inputBase, textareaCls, useToast } from '../components/ui';
 import { EvaluationsTable } from '../components/shared';
-import { appealWindowOpen, fmtDate, fmtDateTime, fmtPct } from '../lib/metrics';
+import { isQaRole, appealWindowOpen, fmtDate, fmtDateTime, fmtPct } from '../lib/metrics';
 import type { AppealItem, Evaluation } from '../lib/types';
 
 // ------------------------------------------------------------------ list
 export function EvaluationsPage() {
   const { me } = useApp();
   const ref = useRef_();
-  const [sel, setSel, periods] = usePeriodSelection(me!.role === 'super_admin');
+  const [sel, setSel, periods] = usePeriodSelection(isQaRole(me!.role));
   const data = useScopeData(sel);
   const [type, setType] = useState('');
   const [cam, setCam] = useState('');
@@ -83,7 +83,7 @@ export function EvaluationDetailPage() {
       <PageHeader title={`${e.task_type_name} evaluation`} subtitle={<>{e.cam_name} · {e.period_label} · audited {fmtDateTime(e.audited_at)}</>}
         actions={<>
           {isOwner && <Button disabled={!windowOpen} title={windowOpen ? '' : 'The appeal window has closed'} onClick={() => setAppealOpen(true)}><Scale className="h-4 w-4" />Raise Appeal</Button>}
-          {me!.role === 'super_admin' && <Button variant="secondary" onClick={() => setAdjustOpen(true)}>Correct score</Button>}
+          {isQaRole(me!.role) && <Button variant="secondary" onClick={() => setAdjustOpen(true)}>Correct score</Button>}
         </>} />
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <Card title="Scores by parameter" subtitle="Earned score against the maximum for each parameter in this task type." pad={false}>
@@ -146,7 +146,7 @@ export function EvaluationDetailPage() {
         </Card>
       )}
       {isOwner && appealOpen && <AppealForm open onClose={() => setAppealOpen(false)} evaluation={e} deadline={deadline.data} preselect={preselect} onDone={() => bump()} />}
-      {me!.role === 'super_admin' && <AdjustScoreModal open={adjustOpen} onClose={() => setAdjustOpen(false)} evaluation={e} onDone={() => bump()} />}
+      {isQaRole(me!.role) && <AdjustScoreModal open={adjustOpen} onClose={() => setAdjustOpen(false)} evaluation={e} onDone={() => bump()} />}
     </div>
   );
 }

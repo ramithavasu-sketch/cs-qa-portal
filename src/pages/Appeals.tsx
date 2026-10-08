@@ -5,11 +5,11 @@ import { useApp, useAsync, useRef_ } from '../app/context';
 import { repo } from '../data';
 import { PageHeader } from '../components/Layout';
 import { Button, Card, EmptyState, ErrorBox, Loading, Pagination, Pill, ScoreBadge, StatusBadge, Tabs, Table, td, th, inputCls, inputBase } from '../components/ui';
-import { APPEAL_STATUS_LABEL, fmtDate } from '../lib/metrics';
+import { isQaRole, APPEAL_STATUS_LABEL, fmtDate } from '../lib/metrics';
 import type { Appeal, AppealStatus } from '../lib/types';
 
 type TabDef = { value: string; label: string; statuses?: AppealStatus[] };
-const TABS: Record<'user' | 'admin' | 'super_admin', TabDef[]> = {
+const TABS: Record<'user' | 'admin' | 'super_admin' | 'evaluator', TabDef[]> = {
   user: [
     { value: 'open', label: 'In progress', statuses: ['draft', 'pending_lead_review', 'returned_to_cam', 'pending_qa_review', 'pending_additional_info'] },
     { value: 'done', label: 'Decided', statuses: ['approved', 'partially_approved', 'rejected', 'closed'] },
@@ -29,7 +29,14 @@ const TABS: Record<'user' | 'admin' | 'super_admin', TabDef[]> = {
     { value: 'done', label: 'Decided', statuses: ['approved', 'partially_approved', 'rejected', 'closed'] },
     { value: 'all', label: 'All appeals' },
   ],
-};
+
+  evaluator: [
+    { value: 'qa', label: 'Awaiting QA review', statuses: ['pending_qa_review'] },
+    { value: 'info', label: 'Awaiting information', statuses: ['pending_additional_info'] },
+    { value: 'lead', label: 'With Team Leads', statuses: ['pending_lead_review', 'returned_to_cam'] },
+    { value: 'done', label: 'Decided', statuses: ['approved', 'partially_approved', 'rejected', 'closed'] },
+    { value: 'all', label: 'All appeals' },
+  ],};
 
 export function AppealsPage() {
   const { me } = useApp();
@@ -67,7 +74,7 @@ export function AppealsPage() {
       <div className="flex flex-wrap items-end gap-3">
         <Sel id="af-week" label="Audit week" value={f.week} onChange={(v) => set('week', v)} options={weeks} />
         {me!.role !== 'user' && <Sel id="af-cam" label="CAM" value={f.cam} onChange={(v) => set('cam', v)} options={cams} />}
-        {me!.role === 'super_admin' && <Sel id="af-lead" label="Team Lead" value={f.lead} onChange={(v) => set('lead', v)} options={leads} />}
+        {isQaRole(me!.role) && <Sel id="af-lead" label="Team Lead" value={f.lead} onChange={(v) => set('lead', v)} options={leads} />}
         <Sel id="af-type" label="Task type" value={f.type} onChange={(v) => set('type', v)} options={ref.taskTypes.map((t) => [t.code, t.name])} />
         <Sel id="af-param" label="Disputed parameter" value={f.param} onChange={(v) => set('param', v)} options={paramOptions} />
         <Sel id="af-status" label="Status" value={f.status} onChange={(v) => set('status', v)} options={(Object.keys(APPEAL_STATUS_LABEL) as AppealStatus[]).map((k) => [k, APPEAL_STATUS_LABEL[k]])} />
@@ -97,14 +104,14 @@ export function AppealTable({ rows, role }: { rows: Appeal[]; role: string }) {
   const nav = useNavigate();
   return (
     <Table>
-      <thead><tr><th className={th}>Reference</th>{role !== 'user' && <th className={th}>CAM</th>}{role === 'super_admin' && <th className={th}>Team Lead</th>}
+      <thead><tr><th className={th}>Reference</th>{role !== 'user' && <th className={th}>CAM</th>}{isQaRole(role) && <th className={th}>Team Lead</th>}
         <th className={th}>Week</th><th className={th}>Task</th><th className={th}>Disputed</th><th className={th}>Lead recommendation</th><th className={th}>Status</th>
         <th className={th + ' text-right'}>Days in status</th><th className={th + ' text-right'}>Days since submitted</th><th className={th}>Submitted</th></tr></thead>
       <tbody>{rows.map((a) => (
         <tr key={a.id} className="cursor-pointer hover:bg-sunken/60" onClick={() => nav(`/appeals/${a.id}`)}>
           <td className={td}><Link onClick={(e) => e.stopPropagation()} to={`/appeals/${a.id}`} className="font-mono text-[12.5px] font-medium text-brand hover:underline">{a.reference}</Link></td>
           {role !== 'user' && <td className={td + ' whitespace-nowrap font-medium'}>{a.cam_name}</td>}
-          {role === 'super_admin' && <td className={td + ' whitespace-nowrap text-muted'}>{a.lead_name ?? '—'}</td>}
+          {isQaRole(role) && <td className={td + ' whitespace-nowrap text-muted'}>{a.lead_name ?? '—'}</td>}
           <td className={td}>{a.period_short_label}</td>
           <td className={td + ' whitespace-nowrap'}><span className="font-mono text-[12px]">{a.task_id.slice(0, 8)}</span></td>
           <td className={td}>{a.parameters_label}</td>

@@ -21,7 +21,7 @@ const NOTIFICATION_TYPES: [string, string][] = [
 /** ISO timestamp -> value for <input type="datetime-local"> in this browser's time zone. */
 const toLocalInput = (iso: string) => { const d = new Date(iso); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
 
-const ROLE_NAME: Record<Role, string> = { super_admin: 'Super Admin (QA)', admin: 'Admin (Team Lead)', user: 'User (CAM)' };
+const ROLE_NAME: Record<Role, string> = { super_admin: 'Super Admin (QA)', evaluator: 'Evaluator (QA)', admin: 'Admin (Team Lead)', user: 'User (CAM)' };
 
 // =================================================================== Users & roles
 export function UsersPage() {
@@ -180,7 +180,7 @@ function UserModal({ value, teams, isSelf, ledTeams, onClose, onSaved }: { value
         <Field label="Company email" htmlFor="u-email" required hint="Must match the CAM Name email used in the audit sheet."><input id="u-email" type="email" className={inputCls} value={v.email ?? ''} onChange={(e) => setV({ ...v, email: e.target.value })} /></Field>
         <Field label="Role" htmlFor="u-role" hint={isSelf ? 'You cannot change your own role. Ask another Super Admin.' : v.role === 'admin' ? (ledTeams.length ? `Leads: ${ledTeams.join(', ')}. Change team leadership under Teams.` : 'Assign the teams this Lead manages under Teams.') : undefined}>
           <select id="u-role" className={inputCls} disabled={isSelf} value={v.role} onChange={(e) => setV({ ...v, role: e.target.value as Role })}>{(Object.keys(ROLE_NAME) as Role[]).map((r) => <option key={r} value={r}>{ROLE_NAME[r]}</option>)}</select></Field>
-        {v.role !== 'super_admin' && <Field label={v.role === 'admin' ? 'Member of team (optional)' : 'Team'} htmlFor="u-team" hint={v.role === 'admin' ? 'For a Lead who reports to a manager, e.g. the Senior Manager’s team. Their appeals go to that team’s Lead.' : 'Appeals are routed to this team’s Lead.'}><select id="u-team" className={inputCls} value={v.team_id ?? ''} onChange={(e) => setV({ ...v, team_id: e.target.value || null })}><option value="">No team</option>{teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></Field>}
+        {v.role !== 'super_admin' && v.role !== 'evaluator' && <Field label={v.role === 'admin' ? 'Member of team (optional)' : 'Team'} htmlFor="u-team" hint={v.role === 'admin' ? 'For a Lead who reports to a manager, e.g. the Senior Manager’s team. Their appeals go to that team’s Lead.' : 'Appeals are routed to this team’s Lead.'}><select id="u-team" className={inputCls} value={v.team_id ?? ''} onChange={(e) => setV({ ...v, team_id: e.target.value || null })}><option value="">No team</option>{teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></Field>}
         <ErrorBox error={err} />
       </div>
     </Modal>
@@ -364,7 +364,8 @@ export function ScoringPage() {
 
 // =================================================================== Reporting periods & settings
 export function PeriodsPage() {
-  const { reloadRef } = useApp();
+  const { reloadRef, me } = useApp();
+  const isSuperAdmin = me!.role === 'super_admin';
   const ref = useRef_();
   const toast = useToast();
   const [s, setS] = useState<PortalSettings>(ref.settings);
@@ -401,7 +402,7 @@ export function PeriodsPage() {
   const DOW = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Reporting Periods & Settings" subtitle="Audit weeks are created automatically from the QA Week label on import. Publishing a week releases every CAM’s report at once — no per-CAM date changes." actions={<Button variant="secondary" onClick={() => setNewWeek(true)}>Add audit week</Button>} />
+      <PageHeader title="Reporting Periods & Settings" subtitle="Audit weeks are created automatically from the QA Week label on import. Publishing a week releases every CAM’s report at once — no per-CAM date changes." actions={isSuperAdmin && <Button variant="secondary" onClick={() => setNewWeek(true)}>Add audit week</Button>} />
       <AutomationCard />
       <Card title="Audit weeks" pad={false}>
         <Table>
@@ -436,7 +437,8 @@ export function PeriodsPage() {
         <Pagination page={wpage} pages={wpages} onPage={setWpage} />
       </Card>
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      {!isSuperAdmin && <p className="rounded bg-info-soft px-3 py-2 text-[13px] text-info">As a QA Evaluator you can publish weeks, set auto-publish times and appeal closing dates. Targets, appeal rules and other settings are managed by the Super Admins.</p>}
+      {isSuperAdmin && <div className="grid gap-5 lg:grid-cols-2">
         <Card title="Targets & colour bands" actions={<Button size="sm" loading={busy === 'qa_target'} onClick={async () => { await saveKey('qa_target'); await saveKey('thresholds'); }}>Save</Button>}>
           <div className="grid grid-cols-2 gap-3">
             <Field label="QA score target (%)" htmlFor="s-target"><input id="s-target" type="number" className={inputCls} value={s.qa_target.score} onChange={(e) => setS({ ...s, qa_target: { ...s.qa_target, score: num(e.target.value) } })} /></Field>
@@ -483,7 +485,7 @@ export function PeriodsPage() {
             <p className="text-[12px] text-muted">Emails contain only the appeal reference, task ID, status and a secure portal link — never scores, feedback or other CAMs’ data. {isDemo && 'Emails are not sent in demo mode.'}</p>
           </div>
         </Card>
-      </div>
+      </div>}
       {newWeek && <NewWeekModal onClose={() => setNewWeek(false)} onSaved={async () => { await reloadRef(); setNewWeek(false); toast('Audit week added as draft.'); }} weekStart={s.reporting.week_start_dow} periods={ref.periods} />}
     </div>
   );

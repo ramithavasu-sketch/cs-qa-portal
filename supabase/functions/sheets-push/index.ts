@@ -6,6 +6,7 @@
 //
 // Auth: header `x-push-secret` must equal the SHEETS_PUSH_SECRET function secret.
 // Body: { source: 'live' | 'archive', label?: string, header: string[], rows: string[][], first_row: number }
+//   or  { action: 'changes', since?: ISO timestamp }  → score changes made in the portal since then
 import { json, serviceClient, HttpError } from '../_shared/auth.ts';
 import { mapAuditRows, rowsToRecords } from '../_shared/mapper.ts';
 
@@ -30,7 +31,16 @@ Deno.serve(async (req) => {
     if (!sameSecret(clean(req.headers.get('x-push-secret')), secret)) throw new HttpError(401, 'Wrong or missing push secret');
     if (Number(req.headers.get('content-length') ?? 0) > MAX_BYTES) throw new HttpError(413, 'Too much data in one request; send fewer rows at a time');
 
-    const body = await req.json().catch(() => null) as { source?: string; label?: string; header?: unknown; rows?: unknown; first_row?: number } | null;
+    const body = await req.json().catch(() => null) as { action?: string; since?: string; source?: string; label?: string; header?: unknown; rows?: unknown; first_row?: number } | null;
+
+    // Score changes made in the portal (appeals, QA corrections), for writing back to the sheet.
+    if (body?.action === 'changes') {
+      const since = body.since && !Number.isNaN(Date.parse(body.since)) ? body.since : null;
+      const { data, error } = await serviceClient().rpc('score_changes_since', { p_since: since });
+      if (error) throw new HttpError(500, error.message);
+      const changes = (data ?? []) as { changed_at: string }[];
+      return json({ changes, next_since: changes.length ? changes[changes.length - 1].changed_at : since });
+    }
     if (!body || !Array.isArray(body.header) || !Array.isArray(body.rows)) throw new HttpError(400, 'Expected { header: [...], rows: [[...]] }');
     if (body.rows.length > MAX_ROWS) throw new HttpError(413, `Send at most ${MAX_ROWS} rows per request`);
     const source = body.source === 'archive' ? 'archive' : 'live';

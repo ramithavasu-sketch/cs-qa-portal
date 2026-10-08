@@ -30,7 +30,7 @@ select public.assert_true((select cc_email = 'lead.a@test.co' and subject = 'CS 
   where kind = 'weekly_report' and recipient_email = 'cam.a1@test.co' limit 1), 'To CAM, CC Lead, subject rendered');
 select public.assert_true((select body_html like '%href="https://qa.example.com/#/?mode=week&amp;period=%' and body_html like '%Quality Assurance Report%'
   and body_html like '%WK-39 (09/24–09/30/2026)%' from public.email_outbox where kind = 'weekly_report' limit 1), 'body has hyperlinked report and week range');
-select public.assert_true((select bool_and(body_text not like '%95%' and body_text not like '%85%') from public.email_outbox where kind = 'weekly_report'), 'email carries no scores');
+select public.assert_true((select bool_and(body_text !~ '\d+(\.\d+)?\s*%' and body_text !~* 'score') from public.email_outbox where kind = 'weekly_report'), 'email carries no scores');
 
 select public.test_as('cam.a1@test.co'); set session authorization authenticated;
 select public.assert_true((select count(*) = 0 from public.weekly_report_emails), 'CAM cannot read the email log');

@@ -294,7 +294,8 @@ export class DemoRepo implements Repo {
     return e;
   }
   private meOrNull() { return this.s.employees.find((x) => x.id === this.meId && x.status === 'active') ?? null; }
-  private isSuper() { return this.meOrNull()?.role === 'super_admin'; }
+  /** QA staff: Super Admin or Evaluator (mirrors public.is_qa()). */
+  private isQa() { const r = this.meOrNull()?.role; return r === 'super_admin' || r === 'evaluator'; }
   private isLeadOf(camId: string) {
     const me = this.meOrNull();
     if (!me || me.role !== 'admin') return false;
@@ -302,13 +303,13 @@ export class DemoRepo implements Repo {
     const team = cam?.team_id ? this.s.teams.find((t) => t.id === cam.team_id) : undefined;
     return team?.lead_id === me.id;
   }
-  private canViewCam(camId: string) { return this.isSuper() || camId === this.meId || this.isLeadOf(camId); }
+  private canViewCam(camId: string) { return this.isQa() || camId === this.meId || this.isLeadOf(camId); }
   private published(periodId: string) { return this.s.periods.find((p) => p.id === periodId)?.status === 'published'; }
-  private canViewEval(e: RawEvaluation) { return this.isSuper() || (this.canViewCam(e.cam_id) && this.published(e.period_id)); }
+  private canViewEval(e: RawEvaluation) { return this.isQa() || (this.canViewCam(e.cam_id) && this.published(e.period_id)); }
   private canViewAppeal(a: RawAppeal) {
     const me = this.meOrNull();
     if (!me) return false;
-    return me.role === 'super_admin' || a.cam_id === me.id || (me.role === 'admin' && (a.lead_id === me.id || this.isLeadOf(a.cam_id)));
+    return me.role === 'super_admin' || me.role === 'evaluator' || a.cam_id === me.id || (me.role === 'admin' && (a.lead_id === me.id || this.isLeadOf(a.cam_id)));
   }
   private require(cond: boolean, msg: string) { if (!cond) throw new Error(msg); }
 
@@ -389,7 +390,7 @@ export class DemoRepo implements Repo {
     return `${leadIn} Appeal: ${a.reference} · Task: ${e?.task_id ?? '—'} · Status: ${st}.`;
   }
   private notifySupers(type: string, title: string, message: string, link: string, appealId: string) {
-    this.s.employees.filter((e) => e.role === 'super_admin' && e.status === 'active').forEach((e) => this.notify(e.id, type, title, message, link, appealId));
+    this.s.employees.filter((e) => (e.role === 'super_admin' || e.role === 'evaluator') && e.status === 'active').forEach((e) => this.notify(e.id, type, title, message, link, appealId));
   }
   private event(appealId: string, action: string, comment: string | null, visibility: 'shared' | 'internal', from: AppealStatus | null, to: AppealStatus | null, rec: LeadRecommendation | null = null) {
     const me = this.me();
@@ -529,11 +530,11 @@ export class DemoRepo implements Repo {
   async getSettings() { await delay(5); this.me(); return clone(this.s.settings); }
   async getTaskTypes() { this.me(); return clone(this.s.taskTypes); }
   async getParameters() { this.me(); return clone(this.s.parameters); }
-  async getPeriods() { this.me(); return clone(this.s.periods.filter((p) => this.isSuper() || p.status === 'published')); }
+  async getPeriods() { this.me(); return clone(this.s.periods.filter((p) => this.isQa() || p.status === 'published')); }
   async getTeams() { this.me(); return clone(this.s.teams); }
   async getEmployees() {
     this.me();
-    return clone(this.s.employees.filter((e) => this.isSuper() || e.id === this.meId || this.isLeadOf(e.id) || e.role !== 'user'));
+    return clone(this.s.employees.filter((e) => this.isQa() || e.id === this.meId || this.isLeadOf(e.id) || e.role !== 'user'));
   }
 
   // ------------------------------------------------------------------ evaluations
@@ -716,7 +717,7 @@ export class DemoRepo implements Repo {
     const ev = this.s.events.find((x) => x.id === eventId);
     this.require(!!ev, 'Not authorised');
     const a = this.findAppeal(ev!.appeal_id);
-    this.require(this.canViewAppeal(a) && me.role !== 'user' && (ev!.actor_id === me.id || me.role === 'super_admin'), 'Only the author or QA can share this comment');
+    this.require(this.canViewAppeal(a) && me.role !== 'user' && (ev!.actor_id === me.id || me.role === 'super_admin' || me.role === 'evaluator'), 'Only the author or QA can share this comment');
     this.require(ev!.visibility === 'internal', 'This comment is already visible to the CAM');
     ev!.visibility = 'shared';
     this.event(a.id, 'comment_shared', 'An internal comment was shared with the CAM.', 'internal', null, null);
@@ -776,7 +777,7 @@ export class DemoRepo implements Repo {
   }
   private qaRequestInfoSync(appealId: string, from: 'cam' | 'lead', comment: string) {
     const me = this.me(); const a = this.findAppeal(appealId);
-    this.require(me.role === 'super_admin', 'Only QA can request information');
+    this.require(me.role === 'super_admin' || me.role === 'evaluator', 'Only QA can request information');
     this.require(a.status === 'pending_qa_review', 'Appeal is not pending QA review');
     this.require(!!comment && comment.trim().length >= 5, 'Please describe the information needed');
     a.info_requested_from = from; a.info_due_at = addBusinessDays(new Date(), this.s.settings.sla.clarification_days).toISOString();
@@ -787,7 +788,7 @@ export class DemoRepo implements Repo {
   async qaRequestInfo(appealId: string, from: 'cam' | 'lead', comment: string) { await delay(); this.qaRequestInfoSync(appealId, from, comment); this.save(); }
   private qaDecideSync(appealId: string, decisions: QaDecisionInput[], resolution: string, extra: ExtraAdjustmentInput[] = []): AppealStatus {
     const me = this.me(); const a = this.findAppeal(appealId);
-    this.require(me.role === 'super_admin', 'Only QA can decide appeals');
+    this.require(me.role === 'super_admin' || me.role === 'evaluator', 'Only QA can decide appeals');
     this.require(a.status === 'pending_qa_review', `Appeal must be forwarded by the Team Lead before QA can decide (current status: ${a.status})`);
     this.require(!!resolution && resolution.trim().length >= 10, 'Resolution remarks are required (at least 10 characters)');
     const items = this.s.items.filter((i) => i.appeal_id === a.id);
@@ -856,7 +857,7 @@ export class DemoRepo implements Repo {
   async qaReopenAppeal(appealId: string, reason: string) {
     await delay();
     const me = this.me(); const a = this.findAppeal(appealId);
-    this.require(me.role === 'super_admin', 'Only QA can reopen appeals');
+    this.require(me.role === 'super_admin' || me.role === 'evaluator', 'Only QA can reopen appeals');
     this.require(FINAL.includes(a.status), 'Only decided or closed appeals can be reopened');
     this.require(!(a.status === 'closed' && !a.forwarded_at), 'This appeal was withdrawn before Lead review and cannot be reopened by QA');
     this.require(!!reason && reason.trim().length >= 10, 'A reason is required to reopen');
@@ -872,7 +873,7 @@ export class DemoRepo implements Repo {
   async closeAppeal(appealId: string, reason: string) {
     await delay();
     const me = this.me(); const a = this.findAppeal(appealId);
-    if (me.role === 'super_admin') this.require(a.status !== 'closed', 'Appeal is already closed');
+    if (me.role === 'super_admin' || me.role === 'evaluator') this.require(a.status !== 'closed', 'Appeal is already closed');
     else if (a.cam_id === me.id) this.require(['draft', 'pending_lead_review', 'returned_to_cam'].includes(a.status), 'You can only withdraw an appeal before it is forwarded to QA');
     else throw new Error('Not authorised');
     this.require(!!reason && reason.trim().length >= 3, 'Please give a reason');
@@ -886,7 +887,7 @@ export class DemoRepo implements Repo {
   async grantResubmission(evaluationId: string, parameterId: string | null, isAutofail: boolean, reason: string) {
     await delay();
     const me = this.me();
-    this.require(me.role === 'super_admin', 'Only QA can grant resubmissions');
+    this.require(me.role === 'super_admin' || me.role === 'evaluator', 'Only QA can grant resubmissions');
     this.require(!!reason && reason.trim().length >= 5, 'A reason is required');
     const g = { id: uid(), evaluation_id: evaluationId, parameter_id: isAutofail ? null : parameterId, is_autofail: isAutofail, used_at: null };
     this.s.grants.push(g);
@@ -932,9 +933,10 @@ export class DemoRepo implements Repo {
 
   // ------------------------------------------------------------------ admin
   private requireSuper(msg = 'Only QA Super Admins can do this') { this.require(this.me().role === 'super_admin', msg); }
+  private requireQa(msg = 'Only QA can do this') { const r = this.me().role; this.require(r === 'super_admin' || r === 'evaluator', msg); }
   async adminAdjustScore(evaluationId: string, parameterId: string | null, revised: number, reason: string) {
     await delay();
-    this.requireSuper('Only QA Super Admins can change finalized scores');
+    this.requireQa('Only QA can change finalized scores');
     this.require(!!reason && reason.trim().length >= 10, 'A reason (min 10 characters) is required');
     const ev = this.s.evaluations.find((x) => x.id === evaluationId);
     this.require(!!ev, 'Evaluation not found');
@@ -957,7 +959,7 @@ export class DemoRepo implements Repo {
   }
   async setPeriodStatus(periodId: string, status: 'draft' | 'published') {
     await delay();
-    this.requireSuper('Only QA can publish reports');
+    this.requireQa('Only QA can publish reports');
     const p = this.s.periods.find((x) => x.id === periodId)!;
     const prev = clone(p);
     const becamePublished = status === 'published' && p.status !== 'published';
@@ -975,7 +977,15 @@ export class DemoRepo implements Repo {
   }
   async upsertPeriod(p: Partial<Period> & { label: string; start_date: string; end_date: string }) {
     await delay();
-    this.requireSuper();
+    this.requireQa();
+    if (this.me().role === 'evaluator') {
+      // mirrors guard_period_status: Evaluators may only set a week's appeal closing date and auto-publish time
+      const ex = this.s.periods.find((x) => x.id === p.id || x.label === p.label);
+      this.require(!!ex, 'Only Super Admins can add audit weeks');
+      const allowed = new Set(['id', 'label', 'start_date', 'end_date', 'appeal_closes_at', 'auto_publish_at']);
+      this.require(Object.keys(p).every((k) => allowed.has(k)) && p.start_date === ex!.start_date && p.end_date === ex!.end_date,
+        'Evaluators can only change a week\'s appeal closing date and auto-publish time.');
+    }
     this.require(p.end_date >= p.start_date, 'End date must be on or after start date');
     const existing = this.s.periods.find((x) => x.id === p.id || x.label === p.label);
     if (existing) { const prev = clone(existing); Object.assign(existing, p); this.log('update', 'reporting_periods', existing.id, prev, clone(existing)); }
@@ -1016,7 +1026,7 @@ export class DemoRepo implements Repo {
     this.requireSuper();
     const email = String(e.email ?? '').trim().toLowerCase();
     this.require(/^[^@\s]+@[^@\s]+$/.test(email), 'Enter a valid email address');
-    this.require(['super_admin', 'admin', 'user'].includes(e.role), 'Choose a valid role');
+    this.require(['super_admin', 'evaluator', 'admin', 'user'].includes(e.role), 'Choose a valid role');
     this.require(e.status === undefined || e.status === 'active' || e.status === 'inactive', 'Choose a valid status');
     this.require(e.team_id == null || this.s.teams.some((t) => t.id === e.team_id), 'That team does not exist');
     const full_name = String(e.full_name ?? '').trim();
@@ -1197,7 +1207,7 @@ export class DemoRepo implements Repo {
   // ------------------------------------------------------------------ weekly report emails & team mapping
   async weeklyEmailPreview(periodId: string): Promise<WeeklyEmailRow[]> {
     await delay(40);
-    this.requireSuper('Only QA can send weekly report emails');
+    this.requireQa('Only QA can send weekly report emails');
     const cams = [...new Set(this.s.evaluations.filter((e) => e.period_id === periodId).map((e) => e.cam_id))];
     return cams.map((id) => {
       const c = this.s.employees.find((e) => e.id === id)!;
@@ -1211,7 +1221,7 @@ export class DemoRepo implements Repo {
   }
   async sendWeeklyEmails(periodId: string, camIds: string[] | null, resend: boolean) {
     await delay(400);
-    this.requireSuper('Only QA can send weekly report emails');
+    this.requireQa('Only QA can send weekly report emails');
     const p = this.s.periods.find((x) => x.id === periodId)!;
     this.require(p.status === 'published', `Publish ${p.short_label} before emailing CAMs — the report link would show nothing yet`);
     const rows = (await this.weeklyEmailPreview(periodId)).filter((r) => !camIds || camIds.includes(r.cam_id));
@@ -1291,7 +1301,7 @@ export class DemoRepo implements Repo {
     this.require(file?.kind === 'csqa-setup' && file.version === 1 && Array.isArray(file.employees) && Array.isArray(file.teams), 'This is not a CS QA Portal setup file');
     this.require(this.s.evaluations.length === 0, 'Load the setup file before syncing any audits. (Audits are already loaded here.)');
     const me = this.me();
-    const valid = (e: Employee) => typeof e.id === 'string' && typeof e.email === 'string' && typeof e.full_name === 'string' && ['super_admin', 'admin', 'user'].includes(e.role);
+    const valid = (e: Employee) => typeof e.id === 'string' && typeof e.email === 'string' && typeof e.full_name === 'string' && ['super_admin', 'evaluator', 'admin', 'user'].includes(e.role);
     const emps: Employee[] = file.employees.filter(valid).map((e) => ({ id: e.id, email: e.email.trim().toLowerCase(), full_name: e.full_name, role: e.role, status: e.status === 'inactive' ? 'inactive' : 'active', team_id: e.team_id ?? null, auth_user_id: null }));
     // You stay a Super Admin under your Google account, whatever the file says.
     let mine = emps.find((e) => e.email === me.email);

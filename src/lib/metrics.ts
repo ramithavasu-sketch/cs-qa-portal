@@ -44,6 +44,8 @@ export function finalRating(s: { avg: number | null; autofailRate: number | null
  * team (e.g. the Leads in the Senior Manager's team). QA Super Admins are never included.
  */
 export const isReportee = (e: Employee) => e.role === 'user' || (e.role === 'admin' && !!e.team_id);
+/** QA staff: Super Admins and QA Evaluators (Evaluators cannot manage users, teams, scoring, settings, imports or the audit log). */
+export const isQaRole = (r: string | null | undefined) => r === 'super_admin' || r === 'evaluator';
 
 export type Band = 'green' | 'amber' | 'red' | 'none';
 export function band(score: number | null | undefined, s: PortalSettings): Band {

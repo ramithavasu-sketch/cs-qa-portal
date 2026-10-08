@@ -148,7 +148,8 @@ export function generateDemoSeed(today = new Date(), weeks = 12): DemoSeed {
   const passwords: Record<string, string> = {};
 
   for (const q of QA_TEAM) {
-    employees.push({ id: uuidFrom(r), email: q.email, full_name: q.name, role: 'super_admin', status: 'active', team_id: null, is_demo: true });
+    // the second QA person is a QA Evaluator, so the demo shows both QA roles
+    employees.push({ id: uuidFrom(r), email: q.email, full_name: q.name, role: q.name === 'Theo Grant' ? 'evaluator' : 'super_admin', status: 'active', team_id: null, is_demo: true });
   }
   LEADS.forEach((l) => {
     const lead: Employee = { id: uuidFrom(r), email: emailOf(l.name), full_name: l.name, role: 'admin', status: 'active', team_id: null, is_demo: true };

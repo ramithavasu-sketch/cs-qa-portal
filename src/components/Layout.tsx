@@ -3,16 +3,16 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   LayoutDashboard, ListChecks, BarChart3, FileText, Download, Scale, Bell, Users, UsersRound, SlidersHorizontal,
-  CalendarCog, Upload, ScrollText, Mail, LogOut, Menu, X, ShieldCheck,
+  CalendarCog, Upload, ScrollText, Mail, LogOut, Menu, X, ShieldCheck, ClipboardCheck,
 } from 'lucide-react';
 import { useApp, useAsync } from '../app/context';
 import { repo, demoRepo, localRepo, isGoogle } from '../data';
 import { AutoSheetSync } from './SheetSync';
 import { fmtDateTime } from '../lib/metrics';
 
-const ROLE_LABEL = { super_admin: 'QA · Super Admin', admin: 'Team Lead · Admin', user: 'CAM · User' } as const;
+const ROLE_LABEL = { super_admin: 'QA · Super Admin', evaluator: 'QA · Evaluator', admin: 'Team Lead · Admin', user: 'CAM · User' } as const;
 
-interface NavItem { to: string; label: string; icon: typeof LayoutDashboard; roles?: ('super_admin' | 'admin' | 'user')[] }
+interface NavItem { to: string; label: string; icon: typeof LayoutDashboard; roles?: ('super_admin' | 'evaluator' | 'admin' | 'user')[] }
 const MAIN: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/evaluations', label: 'Task Evaluations', icon: ListChecks },
@@ -20,16 +20,17 @@ const MAIN: NavItem[] = [
   { to: '/reports', label: 'Report History', icon: FileText },
   { to: '/downloads', label: 'Download Reports', icon: Download },
   { to: '/appeals', label: 'Appeals', icon: Scale },
+  { to: '/my-audits', label: 'My Audits', icon: ClipboardCheck, roles: ['super_admin', 'evaluator'] },
   { to: '/notifications', label: 'Notifications', icon: Bell },
 ];
 const ADMIN: NavItem[] = [
-  { to: '/admin/users', label: 'Users & Roles', icon: Users },
-  { to: '/admin/teams', label: 'Teams & Assignments', icon: UsersRound },
-  { to: '/admin/scoring', label: 'Scoring Configuration', icon: SlidersHorizontal },
+  { to: '/admin/users', label: 'Users & Roles', icon: Users, roles: ['super_admin'] },
+  { to: '/admin/teams', label: 'Teams & Assignments', icon: UsersRound, roles: ['super_admin'] },
+  { to: '/admin/scoring', label: 'Scoring Configuration', icon: SlidersHorizontal, roles: ['super_admin'] },
   { to: '/admin/periods', label: 'Reporting & Settings', icon: CalendarCog },
   { to: '/admin/emails', label: 'Weekly Report Emails', icon: Mail },
-  { to: '/admin/import', label: 'Data Import', icon: Upload },
-  { to: '/admin/audit', label: 'Audit Logs', icon: ScrollText },
+  { to: '/admin/import', label: 'Data Import', icon: Upload, roles: ['super_admin'] },
+  { to: '/admin/audit', label: 'Audit Logs', icon: ScrollText, roles: ['super_admin'] },
 ];
 
 export default function Layout() {
@@ -38,7 +39,7 @@ export default function Layout() {
   const loc = useLocation();
   useEffect(() => setOpen(false), [loc.pathname]);
   if (!me) return null;
-  const isSuper = me.role === 'super_admin';
+  const isQa = me.role === 'super_admin' || me.role === 'evaluator';
 
   return (
     <div className="flex min-h-full">
@@ -54,8 +55,8 @@ export default function Layout() {
           <button className="ml-auto lg:hidden" onClick={() => setOpen(false)} aria-label="Close menu"><X className="h-5 w-5" /></button>
         </div>
         <nav className="flex-1 overflow-y-auto px-2 py-3" aria-label="Main">
-          <NavGroup items={MAIN} />
-          {isSuper && (<><div className="eyebrow px-3 pb-1 pt-4">QA administration</div><NavGroup items={ADMIN} /></>)}
+          <NavGroup items={MAIN} role={me.role} />
+          {isQa && (<><div className="eyebrow px-3 pb-1 pt-4">{me.role === 'super_admin' ? 'QA administration' : 'QA tools'}</div><NavGroup items={ADMIN} role={me.role} /></>)}
         </nav>
         <div className="border-t border-line p-3 text-[12px] text-muted">
           <div className="font-medium text-ink">{me.full_name}</div>
@@ -70,7 +71,7 @@ export default function Layout() {
       <div className="flex min-w-0 flex-1 flex-col lg:pl-64">
         {demoRepo && <DemoBanner />}
         {localRepo && <LocalBanner />}
-        {localRepo && isSuper && <AutoSheetSync />}
+        {localRepo && me.role === 'super_admin' && <AutoSheetSync />}
         <header className="sticky z-20 flex h-14 items-center gap-3 border-b border-line bg-surface/95 px-4 backdrop-blur" style={{ top: 'env(safe-area-inset-top, 0px)' }}>
           <button className="lg:hidden" onClick={() => setOpen(true)} aria-label="Open menu"><Menu className="h-5 w-5" /></button>
           <div className="min-w-0 flex-1 truncate text-[13px] text-muted">
@@ -86,10 +87,10 @@ export default function Layout() {
   );
 }
 
-function NavGroup({ items }: { items: NavItem[] }) {
+function NavGroup({ items, role }: { items: NavItem[]; role: string }) {
   return (
     <ul className="flex flex-col gap-0.5">
-      {items.map((it) => (
+      {items.filter((it) => !it.roles || (it.roles as string[]).includes(role)).map((it) => (
         <li key={it.to}>
           <NavLink to={it.to} end={it.to === '/'} className={({ isActive }) => clsx('flex items-center gap-2.5 rounded px-3 py-2 text-[13.5px] font-medium',
             isActive ? 'bg-brand-soft text-brand' : 'text-muted hover:bg-sunken hover:text-ink')}>

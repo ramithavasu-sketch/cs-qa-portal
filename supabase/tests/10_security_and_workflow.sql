@@ -192,7 +192,7 @@ select public.assert_true((select count(*) = 2 from public.evaluations), 'Lead A
 select public.assert_true((select count(*) = 0 from public.evaluations where id = public.tid('ev_b1')), 'Lead A cannot read Team Beta evaluation');
 select public.assert_true((select count(*) = 2 from public.employees where role = 'user'), 'Lead A sees only own CAMs in directory');
 select public.expect_error($$ select public.admin_adjust_score(public.tid('ev_a1'), '00000000-0000-4000-a000-000000000106', 10, 'lead trying to change score') $$,
-  '%Only QA Super Admins%', 'Lead cannot change finalized scores');
+  '%Only QA%', 'Lead cannot change finalized scores');
 update public.evaluation_parameters set max_score = 50; -- RLS: 0 rows
 reset session authorization;
 select public.assert_true((select max_score = 30 from public.evaluation_parameters where id = '00000000-0000-4000-a000-000000000101'), 'rubric unchanged after Lead attempt');

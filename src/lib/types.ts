@@ -1,7 +1,7 @@
 import type { PortalSettings } from '../../supabase/functions/_shared/rubric';
 export type { PortalSettings };
 
-export type Role = 'super_admin' | 'admin' | 'user';
+export type Role = 'super_admin' | 'evaluator' | 'admin' | 'user';
 export type AppealStatus =
   | 'draft' | 'pending_lead_review' | 'returned_to_cam' | 'pending_qa_review'
   | 'pending_additional_info' | 'approved' | 'partially_approved' | 'rejected' | 'closed';

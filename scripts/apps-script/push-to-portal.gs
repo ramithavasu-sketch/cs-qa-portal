@@ -9,6 +9,11 @@
  *   2. Check the TABS list below, then run  pushToPortal  once and click Allow.
  *   3. Run  installTrigger  once so it repeats every 30 minutes.
  * Rows already in the portal are skipped, so running it again is always safe.
+ *
+ * Score changes made in the portal (approved appeals, QA corrections) are written back too:
+ * the original audit row gets the new parameter score and task Score (with a cell note showing
+ * the old value and the reason), and every change is listed in the "Portal Score Changes" tab.
+ * This runs at the end of every pushToPortal; run  pullScoreChanges  on its own to do just that.
  */
 
 const PORTAL_PUSH_URL = 'https://fjctcwhhugkvxfsotzjc.supabase.co/functions/v1/sheets-push';
@@ -58,8 +63,92 @@ function pushToPortal() {
     }
     summary.push(`${tab.name}: ${totals.inserted} new · ${totals.duplicates} already in the portal · ${totals.rejected} rejected`);
   }
+  try { summary.push(pullScoreChanges()); } catch (e) { summary.push('Score changes: ' + e.message); }
   console.log(summary.join('\n'));
   return summary.join('\n');
+}
+
+const CHANGES_TAB = 'Portal Score Changes';
+const CHANGES_HEADER = ['Changed (portal)', 'CAM', 'CAM Email', 'QA Week', 'DS Task Link', 'Task Type', 'What changed', 'Original', 'New', 'New task score',
+  'Reason', 'Approved by', 'Appeal', 'Sheet row updated'];
+const keyOf = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/** Fetches score changes made in the portal since the last run and writes them into this sheet. */
+function pullScoreChanges() {
+  const secret = (PropertiesService.getScriptProperties().getProperty('PORTAL_PUSH_SECRET') || '').trim().replace(/^['"]+|['"]+$/g, '').trim();
+  if (!secret) throw new Error('Add PORTAL_PUSH_SECRET under Project Settings → Script Properties first.');
+  const props = PropertiesService.getDocumentProperties();
+  const book = SpreadsheetApp.getActiveSpreadsheet();
+  let log = book.getSheetByName(CHANGES_TAB);
+  if (!log) { log = book.insertSheet(CHANGES_TAB); log.appendRow(CHANGES_HEADER); log.setFrozenRows(1); log.getRange(1, 1, 1, CHANGES_HEADER.length).setFontWeight('bold'); }
+
+  const live = TABS.filter((t) => t.source === 'live').map((t) => book.getSheetByName(t.name)).filter(Boolean);
+  const index = live.map(indexSheet);
+  let since = props.getProperty('score_changes_since') || null;
+  let done = 0, updated = 0;
+  for (let round = 0; round < 10; round++) {
+    const res = UrlFetchApp.fetch(PORTAL_PUSH_URL, { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      headers: { 'x-push-secret': secret }, payload: JSON.stringify({ action: 'changes', since }) });
+    const body = JSON.parse(res.getContentText() || '{}');
+    if (res.getResponseCode() !== 200) throw new Error('Portal refused the score-change request: ' + (body.error || res.getResponseCode()));
+    const changes = body.changes || [];
+    for (const c of changes) {
+      const where = applyChange(index, c);
+      if (where) updated++;
+      log.appendRow([new Date(c.changed_at), c.cam_name, c.cam_email, c.qa_week, c.task_link, c.task_type,
+        c.kind === 'autofail' ? 'Auto-Fail' : c.parameter_name, c.kind === 'autofail' ? (c.original_value ? 'Yes' : 'No') : c.original_value,
+        c.kind === 'autofail' ? (c.revised_value ? 'Yes' : 'No') : c.revised_value, c.task_score, c.reason, c.approved_by || '', c.appeal_reference || 'QA correction',
+        where || 'Row not found in the sheet']);
+      done++;
+    }
+    since = body.next_since || since;
+    if (since) props.setProperty('score_changes_since', since);
+    if (changes.length < 500) break;
+  }
+  return `Score changes: ${done} received from the portal, ${updated} sheet row(s) updated`;
+}
+
+/** Column positions and a lookup of rows by DS Task Link + CAM Name + QA Week. */
+function indexSheet(sheet) {
+  const lastRow = sheet.getLastRow(), lastCol = sheet.getLastColumn();
+  const header = sheet.getRange(1, 1, 1, lastCol).getDisplayValues()[0];
+  const col = (name) => header.findIndex((h) => keyOf(h) === keyOf(name)) + 1;
+  const c = { link: col('DS Task Link'), cam: col('CAM Name'), week: col('QA Week'), score: col('Score'), af: col('Auto-Fail') };
+  const rows = new Map();
+  if (lastRow >= 2 && c.link && c.cam && c.week) {
+    const vals = sheet.getRange(2, 1, lastRow - 1, lastCol).getDisplayValues();
+    vals.forEach((r, i) => rows.set([r[c.link - 1], r[c.cam - 1], r[c.week - 1]].map((x) => String(x).trim().toLowerCase()).join('|'), i + 2));
+  }
+  return { sheet, header, col, c, rows };
+}
+
+/** Updates the original audit row; returns "Tab!row" or null when the row isn't in this sheet. */
+function applyChange(index, ch) {
+  const key = [ch.task_link, ch.cam_email, ch.qa_week].map((x) => String(x || '').trim().toLowerCase()).join('|');
+  for (const ix of index) {
+    const row = ix.rows.get(key);
+    if (!row) continue;
+    const when = Utilities.formatDate(new Date(ch.changed_at), Session.getScriptTimeZone(), 'dd MMM yyyy HH:mm');
+    const note = (from, to) => `Changed in CS QA Portal on ${when}${ch.approved_by ? ' by ' + ch.approved_by : ''}: ${from} → ${to}.` +
+      `${ch.reason ? ' Reason: ' + ch.reason : ''}${ch.appeal_reference ? ' (appeal ' + ch.appeal_reference + ')' : ''}`;
+    const addNote = (cell, text) => { const old = cell.getNote(); cell.setNote(old ? old + '\n' + text : text); };
+    if (ch.kind === 'autofail' && ix.c.af) {
+      const cell = ix.sheet.getRange(row, ix.c.af);
+      addNote(cell, note(ch.original_value ? 'Yes' : 'No', ch.revised_value ? 'Yes' : 'No'));
+      cell.setValue(ch.revised_value ? 'Yes' : 'No');
+    } else if (ch.kind === 'parameter') {
+      const names = [ch.sheet_column].concat(ch.sheet_column_aliases || []).filter(Boolean);
+      const pc = names.map(ix.col).find((n) => n > 0);
+      if (pc) { const cell = ix.sheet.getRange(row, pc); addNote(cell, note(ch.original_value, ch.revised_value)); cell.setValue(Number(ch.revised_value)); }
+    }
+    if (ix.c.score && ch.task_score !== null && ch.task_score !== undefined) {
+      const cell = ix.sheet.getRange(row, ix.c.score);
+      const old = cell.getDisplayValue();
+      if (String(Number(old)) !== String(Number(ch.task_score))) { addNote(cell, note(old, ch.task_score)); cell.setValue(Number(ch.task_score)); }
+    }
+    return `${ix.sheet.getName()}!${row}`;
+  }
+  return null;
 }
 
 /** Sends every row again from the top (safe: duplicates are skipped). */

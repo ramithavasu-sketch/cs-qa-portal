@@ -240,6 +240,8 @@ Nothing reads Looker Studio directly. Scraping is fragile and would need your Go
 7. Choose **installTrigger** and click **Run** once. From now on it runs every 30 minutes. (**removeTrigger** stops it.)
 8. Results appear under **Data Import → Import history** (source *google_sheets*). For archive years, paste the same script into the archive sheet with its tab names and `source: 'archive'`, then run **pushToPortal** once (no trigger needed).
 
+**Score changes back to the sheet.** The same Apps Script also writes portal score changes (approved appeals, QA corrections) back into the audit sheet at the end of every run: the original row (matched by DS Task Link + CAM Name + QA Week) gets the new parameter score and task Score, each with a cell note showing the old value, the reason and who approved it, and every change is listed in a **Portal Score Changes** tab. Run `pullScoreChanges` on its own to do just that. After pasting a newer version of the script, run `pushToPortal` once.
+
 ## 5a. Weekly report emails to CAMs
 
 Once a week is published, **QA administration → Weekly Report Emails** lists every CAM audited that week. The list shows the CAM's email (To), their Team Lead's email (CC), the number of tasks audited, and whether the email has been sent.
@@ -254,6 +256,15 @@ Once a week is published, **QA administration → Weekly Report Emails** lists e
 * Set **Reporting & Settings → Notifications → Portal URL** so the links point at your deployed portal.
 
 **Team Lead emails (CC).** The audit sheet only has Lead *names*. Load the Lead emails once with **Teams & Assignments → Import CAM ↔ Team Lead mapping**, using a CSV or Excel file with the columns *CAM Email, CAM Name, Lead Email, Lead Name, Team*. This file also creates the Lead logins and sets which CAMs each Lead can see.
+
+## 5b. Roles
+
+| Role | Who | Can |
+|---|---|---|
+| Super Admin | QA owners | Everything, including users, teams, scoring, settings, data import and the audit log |
+| Evaluator | QA analysts | Everything QA sees (all teams, draft weeks, internal comments); decide appeals (including on their own audits); correct scores; publish weeks, set appeal closing dates and auto-publish times; send weekly emails; **My Audits** |
+| Admin | Team Leads | Their team's results and appeals (review and forward to QA) |
+| User | CAMs | Their own results; raise appeals |
 
 ## 6. Pages
 Login · Forgot/Reset password · QA Master Dashboard (organisation, by Team Lead, individual CAM) · Team Lead Dashboard · CAM Personal Dashboard (also opened by Leads and QA for any CAM in their scope) · Task Evaluations and Evaluation Detail · Report History (weekly, monthly, quarterly) · Parameter Analysis · Appeal form (from any evaluation) · CAM Appeal History · Lead Review Queue · QA Review Queue · Appeal Detail & Timeline · Download Reports · Users & Roles · Teams & Assignments · Scoring Configuration · Reporting Periods & Settings · Data Import & Validation · Notifications · Audit Logs.

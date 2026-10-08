@@ -26,6 +26,17 @@ export async function requireSuperAdmin(req: Request, admin: SupabaseClient) {
   return emp as { id: string; role: string; status: string; email: string };
 }
 
+/** QA staff: Super Admins and Evaluators. */
+export async function requireQa(req: Request, admin: SupabaseClient) {
+  const token = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '');
+  if (!token) throw new HttpError(401, 'Missing authorization');
+  const { data, error } = await admin.auth.getUser(token);
+  if (error || !data.user) throw new HttpError(401, 'Invalid session');
+  const { data: emp } = await admin.from('employees').select('id, role, status, email').eq('auth_user_id', data.user.id).maybeSingle();
+  if (!emp || emp.status !== 'active' || !['super_admin', 'evaluator'].includes(emp.role)) throw new HttpError(403, 'Only QA can do this');
+  return emp as { id: string; role: string; status: string; email: string };
+}
+
 /** Allows scheduled invocations that present the shared CRON_SECRET header. */
 export function isCron(req: Request) {
   const s = Deno.env.get('CRON_SECRET');
