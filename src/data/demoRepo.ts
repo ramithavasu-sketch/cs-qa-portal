@@ -8,6 +8,7 @@ import type {
   PortalSettings, QaDecisionInput, Role, ScoreAdjustment, SubmitAppealItem, TaskType, Team, WeeklyEmailRow, TeamMappingRow, TeamMappingResult,
 } from '../lib/types';
 import { renderReportEmail, portalLink } from '../lib/email';
+import { appealDeadlineOf } from '../lib/metrics';
 import { generateDemoSeed, referenceData, DEMO_PASSWORD, type RawEvaluation } from '../demo/generate';
 import { mapAuditRows, rowsToRecords, type ImportRow } from '../../supabase/functions/_shared/mapper';
 import type { DataSource } from '../../supabase/functions/_shared/rubric';
@@ -416,9 +417,7 @@ export class DemoRepo implements Repo {
     if (!p || p.status !== 'published') return null;
     if (p.appeal_closes_at) return new Date(p.appeal_closes_at);
     if (!p.published_at) return null;
-    const w = this.s.settings.appeal_window;
-    const base = new Date(p.published_at);
-    return w.business_days ? addBusinessDays(base, w.days) : new Date(base.getTime() + w.days * 86400000);
+    return appealDeadlineOf(p.published_at, this.s.settings);
   }
   private findAppeal(id: string) {
     const a = this.s.appeals.find((x) => x.id === id);

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { RefreshCw, Link2 } from 'lucide-react';
-import { useApp, useRef_ } from '../app/context';
+import { useApp, useAsync, useRef_ } from '../app/context';
 import { repo, isDemo, isLocal, isGoogle } from '../data';
 import { callServer } from '../data/googleRepo';
 import { Button, Card, ErrorBox, Field, Pill, Table, td, th, inputCls, useToast } from './ui';
@@ -97,14 +97,23 @@ export function SheetSourcesCard() {
   const sources = ref.settings.data_sources.sources;
   const last = readLast();
   const canConnect = repo.mode === 'supabase' || isGoogle || (isLocal && !!GOOGLE_CLIENT_ID);
+  // Supabase: audits usually arrive from the Apps Script in the sheet (sheet push); show when that last happened.
+  const batches = useAsync(() => (repo.mode === 'supabase' ? repo.listImportBatches() : Promise.resolve([])), []);
+  const lastPush = (batches.data ?? []).find((b) => b.source === 'google_sheets');
 
   const go = async (scope: 'live' | 'all') => {
     setErr(null); setResults(null);
     try {
       const r = await run(scope, true);
+      if (repo.mode === 'supabase' && r.length === 0) throw new Error('Nothing was synced.');
       setResults(r);
       toast(r.some((x) => x.error) ? 'Sync finished with problems — see below.' : 'Google Sheets synced.', r.some((x) => x.error) ? 'bad' : 'good');
-    } catch (x) { setErr(x); }
+    } catch (x) {
+      const msg = x instanceof Error ? x.message : String(x);
+      setErr(repo.mode === 'supabase' && /not configured/i.test(msg)
+        ? new Error('This portal receives audits from the script inside your Google Sheet, not from this button. To sync now: open the sheet → Extensions → Apps Script → choose pushToPortal → Run. (This button only works if a Google service account is set up.)')
+        : x);
+    }
   };
   const save = async (next: DataSource[]) => { await repo.updateSetting('data_sources', { ...ref.settings.data_sources, sources: next }); await reloadRef(); };
 
@@ -122,7 +131,13 @@ export function SheetSourcesCard() {
           </div>
         )}
         {isLocal && GOOGLE_CLIENT_ID && <p className="text-muted">Uses your own Google account (read-only). Google asks you to sign in the first time in each session.</p>}
-        {repo.mode === 'supabase' && <p className="text-muted">The live sheet also syncs automatically every 30 minutes on the server.</p>}
+        {repo.mode === 'supabase' && (
+          <div className="rounded border border-info/40 bg-info-soft/50 px-3 py-2 text-[13px]">
+            <strong>How audits arrive:</strong> the script in your Google Sheet sends new audits every 30 minutes (see the README, “sync without a service account”).
+            To sync immediately, open the sheet → <em>Extensions → Apps Script</em> → run <code className="font-mono">pushToPortal</code>.
+            <div className="mt-1 text-muted">Last received from the sheet: {lastPush ? <strong className="text-ink">{fmtDateTime(lastPush.created_at)}</strong> : 'not yet'}{lastPush ? ` · ${lastPush.inserted} new, ${lastPush.duplicates} already loaded, ${lastPush.rejected} rejected` : ''}</div>
+          </div>
+        )}
         {isGoogle && <p className="text-muted">Google reads the sheets as the portal owner, so every sheet must be shared with that account (Viewer is enough). The first sync of the live sheet can take a few minutes — progress shows below while it runs. New live weeks arrive as <strong>drafts</strong> — publish them on Reporting &amp; Settings. Archives are published at once. Turn on <em>Automatic jobs</em> there to re-sync the live sheet every 30 minutes.</p>}
         {running && running.length > 6 && <p className="text-info">{running}</p>}
         <Table>

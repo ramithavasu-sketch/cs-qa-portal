@@ -112,7 +112,7 @@ export const DEFAULT_DATA_SOURCES: DataSource[] = buildDataSources();
 export interface PortalSettings {
   qa_target: { score: number; fcr_rate: number; autofail_rate_max: number };
   thresholds: { green: number; amber: number };
-  appeal_window: { days: number; business_days: boolean; max_appeals_per_cam_per_period: number | null };
+  appeal_window: { days: number; business_days: boolean; max_appeals_per_cam_per_period: number | null; /** close at 11:59 pm (portal time zone) on the last day */ end_of_day?: boolean };
   sla: { lead_review_days: number; qa_review_days: number; clarification_days: number };
   reporting: { week_start_dow: number; auto_publish: boolean; auto_publish_dow: number; auto_publish_time: string; timezone: string };
   notifications: {
@@ -146,7 +146,7 @@ export const DEFAULT_REPORT_EMAIL_HTML =
 export const DEFAULT_SETTINGS: PortalSettings = {
   qa_target: { score: 95, fcr_rate: 90, autofail_rate_max: 2 },
   thresholds: { green: 95, amber: 85 },
-  appeal_window: { days: 5, business_days: true, max_appeals_per_cam_per_period: null },
+  appeal_window: { days: 7, business_days: false, max_appeals_per_cam_per_period: null, end_of_day: true },
   sla: { lead_review_days: 2, qa_review_days: 3, clarification_days: 2 },
   reporting: { week_start_dow: 4, auto_publish: false, auto_publish_dow: 1, auto_publish_time: '10:00', timezone: 'Asia/Kolkata' },
   notifications: {

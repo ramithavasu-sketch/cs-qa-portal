@@ -344,11 +344,20 @@ export function appealDeadlineOf(publishedAt: string | null, s: PortalSettings, 
   if (fixedClose) return new Date(fixedClose);
   if (!publishedAt) return null;
   const w = s.appeal_window;
-  const d = new Date(publishedAt);
-  if (!w.business_days) return new Date(d.getTime() + w.days * 86400000);
-  let added = 0;
-  while (added < w.days) { d.setDate(d.getDate() + 1); if (d.getDay() !== 0 && d.getDay() !== 6) added += 1; }
-  return d;
+  let d = new Date(publishedAt);
+  if (!w.business_days) d = new Date(d.getTime() + w.days * 86400000);
+  else { let added = 0; while (added < w.days) { d.setDate(d.getDate() + 1); if (d.getDay() !== 0 && d.getDay() !== 6) added += 1; } }
+  return w.end_of_day ? endOfDayIn(d, s.reporting.timezone) : d;
+}
+/** 23:59:59 on the same calendar date as `d`, in time zone `tz` (mirrors the SQL appeal_deadline). */
+export function endOfDayIn(d: Date, tz: string): Date {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: tz || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' })
+    .formatToParts(d).map((p) => [p.type, p.value]));
+  const guess = new Date(`${parts.year}-${parts.month}-${parts.day}T23:59:59Z`);
+  // shift by the zone's offset at that moment
+  const asTz = new Date(guess.toLocaleString('en-US', { timeZone: tz || 'UTC' }));
+  const asUtc = new Date(guess.toLocaleString('en-US', { timeZone: 'UTC' }));
+  return new Date(guess.getTime() - (asTz.getTime() - asUtc.getTime()));
 }
 export const appealWindowOpen = (e: Evaluation, s: PortalSettings, periods: Period[] = []) => {
   const fixed = periods.find((p) => p.id === e.period_id)?.appeal_closes_at ?? null;
