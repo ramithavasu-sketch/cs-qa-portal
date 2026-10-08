@@ -39,6 +39,12 @@ export function finalRating(s: { avg: number | null; autofailRate: number | null
   return 'below';
 }
 
+/**
+ * People whose QA results are reported: CAMs, plus Team Leads who are themselves members of a
+ * team (e.g. the Leads in the Senior Manager's team). QA Super Admins are never included.
+ */
+export const isReportee = (e: Employee) => e.role === 'user' || (e.role === 'admin' && !!e.team_id);
+
 export type Band = 'green' | 'amber' | 'red' | 'none';
 export function band(score: number | null | undefined, s: PortalSettings): Band {
   if (score === null || score === undefined || Number.isNaN(score)) return 'none';

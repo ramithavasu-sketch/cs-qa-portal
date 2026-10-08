@@ -8,7 +8,7 @@ import { Card, EmptyState, ErrorBox, Kpi, Loading, ScoreBadge, StatusBadge, Tabl
 import { TrendSwitch } from '../components/charts';
 import { CamTable } from '../components/CamTable';
 import { DownloadMenu, ParameterAnalysis } from '../components/shared';
-import { band, camRows, fmtDate, fmtPct, summarize, variance } from '../lib/metrics';
+import { isReportee, band, camRows, fmtDate, fmtPct, summarize, variance } from '../lib/metrics';
 import { buildReport } from '../lib/report';
 
 export default function LeadDashboard() {
@@ -17,7 +17,7 @@ export default function LeadDashboard() {
   const s = ref.settings;
   const [sel, setSel, periods] = usePeriodSelection();
   const myTeams = ref.teams.filter((t) => t.lead_id === me!.id);
-  const cams = ref.employees.filter((e) => e.role === 'user' && e.team_id && myTeams.some((t) => t.id === e.team_id));
+  const cams = ref.employees.filter((e) => e.id !== me!.id && isReportee(e) && e.team_id && myTeams.some((t) => t.id === e.team_id));
   const data = useScopeData(sel, undefined, 26);
   const cur = summarize(data.cur);
   const prev = summarize(data.prev);

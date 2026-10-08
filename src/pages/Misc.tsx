@@ -8,7 +8,7 @@ import { PageHeader } from '../components/Layout';
 import { PeriodPicker, usePeriodSelection } from '../components/PeriodPicker';
 import { Button, Card, EmptyState, ErrorBox, Loading, inputBase } from '../components/ui';
 import { InsightsPanel, ParameterAnalysis } from '../components/shared';
-import { buildInsights, fmtDateTime, METRIC_DEFINITIONS } from '../lib/metrics';
+import { isReportee, buildInsights, fmtDateTime, METRIC_DEFINITIONS } from '../lib/metrics';
 
 export function ParametersPage() {
   const { me } = useApp();
@@ -16,7 +16,7 @@ export function ParametersPage() {
   const [sel, setSel, periods] = usePeriodSelection(me!.role === 'super_admin');
   const [cam, setCam] = useState(me!.role === 'user' ? me!.id : '');
   const data = useScopeData(sel, cam ? [cam] : undefined);
-  const cams = ref.employees.filter((e) => e.role === 'user' && (me!.role === 'super_admin' || (me!.role === 'admin' && ref.teams.some((t) => t.id === e.team_id && t.lead_id === me!.id))));
+  const cams = ref.employees.filter((e) => isReportee(e) && e.id !== me!.id && (me!.role === 'super_admin' || (me!.role === 'admin' && ref.teams.some((t) => t.id === e.team_id && t.lead_id === me!.id))));
   const insights = useMemo(() => buildInsights(data.cur, data.prev, data.history, data.historyWeeks, ref.parameters, ref.taskTypeNames, ref.settings), [data, ref]);
   return (
     <div className="flex flex-col gap-5">

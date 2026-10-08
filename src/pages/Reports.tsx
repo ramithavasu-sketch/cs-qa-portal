@@ -3,7 +3,7 @@ import { useApp, useAsync, useRef_ } from '../app/context';
 import { repo, isDemo } from '../data';
 import { PageHeader } from '../components/Layout';
 import { Button, Card, EmptyState, ErrorBox, Field, Loading, ScoreBadge, Tabs, Table, td, th, Variance, inputCls, inputBase, useToast, Pill } from '../components/ui';
-import { buildSelection, fmtDate, fmtRange, isOpenAppeal, monthLabel, monthOptions, quarterOptions, summarize, variance, type PeriodMode } from '../lib/metrics';
+import { isReportee, buildSelection, fmtDate, fmtRange, isOpenAppeal, monthLabel, monthOptions, quarterOptions, summarize, variance, type PeriodMode } from '../lib/metrics';
 import { buildReport, downloadReport } from '../lib/report';
 import type { Appeal, Evaluation, Employee } from '../lib/types';
 
@@ -13,16 +13,16 @@ function useScopes() {
   const ref = useRef_();
   return useMemo(() => {
     const out: { key: string; label: string; kind: 'cam' | 'team' | 'org'; cams: Employee[] }[] = [];
-    const camsOfLead = (lid: string) => ref.employees.filter((e) => e.role === 'user' && e.team_id && ref.teams.some((t) => t.id === e.team_id && t.lead_id === lid));
+    const camsOfLead = (lid: string) => ref.employees.filter((e) => e.id !== lid && isReportee(e) && e.team_id && ref.teams.some((t) => t.id === e.team_id && t.lead_id === lid));
     if (me!.role === 'user') out.push({ key: me!.id, label: `${me!.full_name} (me)`, kind: 'cam', cams: [me! as Employee] });
     if (me!.role === 'admin') {
       out.push({ key: 'team', label: 'My whole team', kind: 'team', cams: camsOfLead(me!.id) });
       camsOfLead(me!.id).forEach((c) => out.push({ key: c.id, label: c.full_name, kind: 'cam', cams: [c] }));
     }
     if (me!.role === 'super_admin') {
-      out.push({ key: 'org', label: 'All teams (organisation)', kind: 'org', cams: ref.employees.filter((e) => e.role === 'user') });
+      out.push({ key: 'org', label: 'All teams (organisation)', kind: 'org', cams: ref.employees.filter(isReportee) });
       ref.employees.filter((e) => e.role === 'admin').forEach((l) => out.push({ key: 'lead:' + l.id, label: `Team of ${l.full_name}`, kind: 'team', cams: camsOfLead(l.id) }));
-      ref.employees.filter((e) => e.role === 'user').forEach((c) => out.push({ key: c.id, label: c.full_name, kind: 'cam', cams: [c] }));
+      ref.employees.filter(isReportee).forEach((c) => out.push({ key: c.id, label: c.full_name, kind: 'cam', cams: [c] }));
     }
     return out;
   }, [me, ref]);

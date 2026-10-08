@@ -9,7 +9,7 @@ import { TrendSwitch } from '../components/charts';
 import CamDashboard from './CamDashboard';
 import { CamTable } from '../components/CamTable';
 import { DownloadMenu, ParameterAnalysis } from '../components/shared';
-import { APPEAL_STATUS_LABEL, band, camRows, fmtDate, fmtPct, isOpenAppeal, isPendingAppeal, isResolvedAppeal, summarize, variance } from '../lib/metrics';
+import { isReportee, APPEAL_STATUS_LABEL, band, camRows, fmtDate, fmtPct, isOpenAppeal, isPendingAppeal, isResolvedAppeal, summarize, variance } from '../lib/metrics';
 import { buildReport } from '../lib/report';
 import type { AppealStatus } from '../lib/types';
 
@@ -38,7 +38,7 @@ export default function QaDashboard() {
 
   const leads = ref.employees.filter((e) => e.role === 'admin');
   const teamOfLead = (id: string) => ref.teams.filter((t) => t.lead_id === id).map((t) => t.id);
-  const allCams = ref.employees.filter((e) => e.role === 'user');
+  const allCams = ref.employees.filter(isReportee);
   const cams = allCams.filter((c) => (!leadId || (c.team_id && teamOfLead(leadId).includes(c.team_id))) && (!camPick || c.id === camPick));
   const camSet = new Set(cams.map((c) => c.id));
   const evFilter = (list: typeof data.cur) => list.filter((e) => camSet.has(e.cam_id) && (!taskType || e.task_type === taskType)

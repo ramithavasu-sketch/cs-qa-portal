@@ -53,7 +53,7 @@ export function UsersPage() {
           <tbody>{list.slice((page - 1) * 25, page * 25).map((e) => (
             <tr key={e.id}>
               <td className={td + ' font-medium'}>{e.full_name}</td><td className={td + ' text-muted'}>{e.email}</td><td className={td}>{ROLE_NAME[e.role]}</td>
-              <td className={td}>{e.role === 'admin' ? ref.teams.filter((t) => t.lead_id === e.id).map((t) => t.name).join(', ') || '—' : teamName(e.team_id)}</td>
+              <td className={td}>{e.role === 'admin' ? <>{ref.teams.filter((t) => t.lead_id === e.id).map((t) => t.name).join(', ') ? <>Leads {ref.teams.filter((t) => t.lead_id === e.id).map((t) => t.name).join(', ')}</> : '—'}{e.team_id && <div className="text-[12px] text-muted">Member of {teamName(e.team_id)}</div>}</> : teamName(e.team_id)}</td>
               <td className={td}>{isGoogle ? (e.email.endsWith('.invalid') ? <Pill tone="warn">Email needed</Pill> : <Pill tone="good">Google sign-in</Pill>) : isDemo || e.auth_user_id ? <Pill tone="good">Login ready</Pill> : <Pill>No login yet</Pill>}</td>
               <td className={td}>{e.status === 'active' ? <Pill tone="good">Active</Pill> : <Pill tone="bad">Deactivated</Pill>}</td>
               <td className={td + ' whitespace-nowrap'}>
@@ -180,7 +180,7 @@ function UserModal({ value, teams, isSelf, ledTeams, onClose, onSaved }: { value
         <Field label="Company email" htmlFor="u-email" required hint="Must match the CAM Name email used in the audit sheet."><input id="u-email" type="email" className={inputCls} value={v.email ?? ''} onChange={(e) => setV({ ...v, email: e.target.value })} /></Field>
         <Field label="Role" htmlFor="u-role" hint={isSelf ? 'You cannot change your own role. Ask another Super Admin.' : v.role === 'admin' ? (ledTeams.length ? `Leads: ${ledTeams.join(', ')}. Change team leadership under Teams.` : 'Assign the teams this Lead manages under Teams.') : undefined}>
           <select id="u-role" className={inputCls} disabled={isSelf} value={v.role} onChange={(e) => setV({ ...v, role: e.target.value as Role })}>{(Object.keys(ROLE_NAME) as Role[]).map((r) => <option key={r} value={r}>{ROLE_NAME[r]}</option>)}</select></Field>
-        {v.role === 'user' && <Field label="Team" htmlFor="u-team" hint="Appeals are routed to this team’s Lead."><select id="u-team" className={inputCls} value={v.team_id ?? ''} onChange={(e) => setV({ ...v, team_id: e.target.value || null })}><option value="">No team</option>{teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></Field>}
+        {v.role !== 'super_admin' && <Field label={v.role === 'admin' ? 'Member of team (optional)' : 'Team'} htmlFor="u-team" hint={v.role === 'admin' ? 'For a Lead who reports to a manager, e.g. the Senior Manager’s team. Their appeals go to that team’s Lead.' : 'Appeals are routed to this team’s Lead.'}><select id="u-team" className={inputCls} value={v.team_id ?? ''} onChange={(e) => setV({ ...v, team_id: e.target.value || null })}><option value="">No team</option>{teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></Field>}
         <ErrorBox error={err} />
       </div>
     </Modal>
@@ -195,7 +195,7 @@ export function TeamsPage() {
   const [edit, setEdit] = useState<Partial<Team> | null>(null);
   const [del, setDel] = useState<Team | null>(null);
   const leads = ref.employees.filter((e) => e.role === 'admin' && e.status === 'active');
-  const cams = ref.employees.filter((e) => e.role === 'user' && e.status === 'active');
+  const cams = ref.employees.filter((e) => e.status === 'active' && (e.role === 'user' || (e.role === 'admin' && !!e.team_id)));
   const unassigned = cams.filter((c) => !c.team_id);
   const move = async (cam: Employee, team: string) => { try { await repo.upsertEmployee({ ...cam, team_id: team || null }); await reloadRef(); toast(`${cam.full_name} moved.`); } catch (x) { toast((x as Error).message, 'bad'); } };
   return (
