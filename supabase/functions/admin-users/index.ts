@@ -15,7 +15,8 @@ Deno.serve(async (req) => {
 
     if (body.action === 'invite') {
       if (emp.status !== 'active') throw new HttpError(400, 'Reactivate the user before inviting');
-      const { data, error } = await admin.auth.admin.inviteUserByEmail(emp.email, { redirectTo: body.redirect_to });
+      // must_change_password: the invitation link signs them in once; the portal then asks them to choose their own password
+      const { data, error } = await admin.auth.admin.inviteUserByEmail(emp.email, { redirectTo: body.redirect_to, data: { must_change_password: true } });
       if (error) throw new HttpError(400, error.message);
       // the on_auth_user_created trigger links by email; make sure it is linked even for pre-existing users
       await admin.from('employees').update({ auth_user_id: data.user.id }).eq('id', emp.id).is('auth_user_id', null);
