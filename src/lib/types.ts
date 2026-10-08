@@ -45,6 +45,8 @@ export interface Period {
   id: string; label: string; short_label: string; year: number; week_number: number;
   start_date: string; end_date: string; status: 'draft' | 'published';
   published_at: string | null; auto_publish_at: string | null;
+  /** Optional fixed appeal deadline for this week (overrides the appeal-window rule). */
+  appeal_closes_at?: string | null;
 }
 
 export interface ScoreRow {

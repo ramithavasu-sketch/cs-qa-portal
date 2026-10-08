@@ -7,8 +7,8 @@ import { repo, isDemo, isLocal, isGoogle } from '../data';
 import { SheetSourcesCard } from '../components/SheetSync';
 import { AutomationCard, SetupTransferCard } from '../components/GoogleSetup';
 import { PageHeader } from '../components/Layout';
-import { Button, Card, ConfirmModal, EmptyState, ErrorBox, Field, Loading, Modal, Pagination, Pill, Table, td, th, inputCls, inputBase, textareaCls, useToast } from '../components/ui';
-import { fmtDateTime, fmtRange } from '../lib/metrics';
+import { InfoTip, Button, Card, ConfirmModal, EmptyState, ErrorBox, Field, Loading, Modal, Pagination, Pill, Table, td, th, inputCls, inputBase, textareaCls, useToast } from '../components/ui';
+import { appealDeadlineOf, fmtDateTime, fmtRange } from '../lib/metrics';
 import { mapAuditRows, headerKey, DEFAULT_COLUMN_MAP, REQUIRED_KEYS, formatWeekLabel, type ColumnMap, type MapperResult } from '../../supabase/functions/_shared/mapper';
 import { saveBlob } from '../lib/report';
 import type { Employee, Parameter, Period, PortalSettings, Role, Team, TeamMappingRow, TeamMappingResult } from '../lib/types';
@@ -381,6 +381,14 @@ export function PeriodsPage() {
       await reloadRef(); toast(next ? 'Auto-publish time saved.' : 'Auto-publish time cleared.');
     } catch (x) { toast((x as Error).message, 'bad'); }
   };
+  const saveAppealClose = async (p: Period, value: string) => {
+    const next = value ? new Date(value).toISOString() : null;
+    if ((p.appeal_closes_at ?? null) === next) return;
+    try {
+      await repo.upsertPeriod({ id: p.id, label: p.label, start_date: p.start_date, end_date: p.end_date, appeal_closes_at: next });
+      await reloadRef(); toast(next ? `${p.short_label}: appeals close ${fmtDateTime(next)}.` : `${p.short_label}: back to the normal appeal window.`);
+    } catch (x) { toast((x as Error).message, 'bad'); }
+  };
   const scheduled = (p: Period) => {
     // Mirrors period_auto_publish_due(): first chosen weekday after the week ends, at the chosen time (shown in this browser's time).
     if (!s.reporting.auto_publish) return null;
@@ -397,7 +405,7 @@ export function PeriodsPage() {
       <AutomationCard />
       <Card title="Audit weeks" pad={false}>
         <Table>
-          <thead><tr><th className={th}>Week</th><th className={th}>Dates</th><th className={th}>Status</th><th className={th}>Published</th><th className={th}>Auto-publish at</th><th className={th}></th></tr></thead>
+          <thead><tr><th className={th}>Week</th><th className={th}>Dates</th><th className={th}>Status</th><th className={th}>Published</th><th className={th}>Auto-publish at</th><th className={th}><span className="inline-flex items-center gap-1">Appeals close <InfoTip text="Optional fixed closing date for this week's appeals. Empty = the normal rule (appeal window days after publishing)." /></span></th><th className={th}></th></tr></thead>
           <tbody>{sorted.slice((wpage - 1) * 20, wpage * 20).map((p) => (
             <tr key={p.id}>
               <td className={td + ' font-medium'}>{p.label}</td><td className={td + ' text-muted'}>{fmtRange(p.start_date, p.end_date)}</td>
@@ -409,6 +417,13 @@ export function PeriodsPage() {
                 {!p.auto_publish_at && scheduled(p) && <div className="text-[11.5px] text-muted">Weekly schedule: {scheduled(p)}</div>}
                 {p.auto_publish_at && <button className="ml-2 text-[12px] text-brand hover:underline" onClick={() => saveAutoPublish(p, '')}>Clear</button>}
               </>}</td>
+              <td className={td}>
+                <label htmlFor={`ac-${p.id}`} className="sr-only">Appeals close for {p.short_label}</label>
+                <input id={`ac-${p.id}`} key={p.appeal_closes_at ?? 'none'} type="datetime-local" className={inputBase + ' w-auto'} defaultValue={p.appeal_closes_at ? toLocalInput(p.appeal_closes_at) : ''} onBlur={(e) => saveAppealClose(p, e.target.value)} />
+                {p.appeal_closes_at ? <button className="ml-2 text-[12px] text-brand hover:underline" onClick={() => saveAppealClose(p, '')}>Clear</button>
+                  : <div className="text-[11.5px] text-muted">{p.status === 'published' ? `Default: ${fmtDateTime(appealDeadlineOf(p.published_at, s)?.toISOString() ?? null)}` : `Default: ${s.appeal_window.days} ${s.appeal_window.business_days ? 'business' : 'calendar'} days after publishing`}</div>}
+                {p.appeal_closes_at && Date.parse(p.appeal_closes_at) < Date.now() && <div className="text-[11.5px] text-muted">Closed</div>}
+              </td>
               <td className={td}><Button size="sm" variant={p.status === 'published' ? 'ghost' : 'primary'} loading={busy === p.id} onClick={async () => {
                 setBusy(p.id);
                 try { await repo.setPeriodStatus(p.id, p.status === 'published' ? 'draft' : 'published'); await reloadRef(); toast(p.status === 'published' ? `${p.short_label} unpublished.` : `${p.short_label} published. CAMs see it now; use “Email CAMs” to send the weekly emails.`); }

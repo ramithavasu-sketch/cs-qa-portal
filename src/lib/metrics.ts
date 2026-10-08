@@ -340,7 +340,8 @@ export function camRows(
 }
 
 /** Client-side estimate of the appeal deadline (the server re-checks it on submit). */
-export function appealDeadlineOf(publishedAt: string | null, s: PortalSettings): Date | null {
+export function appealDeadlineOf(publishedAt: string | null, s: PortalSettings, fixedClose?: string | null): Date | null {
+  if (fixedClose) return new Date(fixedClose);
   if (!publishedAt) return null;
   const w = s.appeal_window;
   const d = new Date(publishedAt);
@@ -349,8 +350,9 @@ export function appealDeadlineOf(publishedAt: string | null, s: PortalSettings):
   while (added < w.days) { d.setDate(d.getDate() + 1); if (d.getDay() !== 0 && d.getDay() !== 6) added += 1; }
   return d;
 }
-export const appealWindowOpen = (e: Evaluation, s: PortalSettings) => {
-  const d = e.period_status === 'published' ? appealDeadlineOf(e.published_at, s) : null;
+export const appealWindowOpen = (e: Evaluation, s: PortalSettings, periods: Period[] = []) => {
+  const fixed = periods.find((p) => p.id === e.period_id)?.appeal_closes_at ?? null;
+  const d = e.period_status === 'published' ? appealDeadlineOf(e.published_at, s, fixed) : null;
   return !!d && Date.now() <= d.getTime();
 };
 

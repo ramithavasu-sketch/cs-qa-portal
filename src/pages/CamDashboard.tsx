@@ -105,7 +105,7 @@ export default function CamDashboard({ camId: propCam, embedded }: { camId?: str
           </Card>
 
           <Card title="Task-level audit results" subtitle="Open a task to see every parameter, the QA feedback and to raise an appeal." pad={false}>
-            <EvaluationsTable evals={data.cur} settings={s} appealedIds={appealedIds} canAppeal={isSelf ? (e) => appealWindowOpen(e, s) : undefined} />
+            <EvaluationsTable evals={data.cur} settings={s} appealedIds={appealedIds} canAppeal={isSelf ? (e) => appealWindowOpen(e, s, ref.periods) : undefined} />
           </Card>
 
           {periodAppeals.length > 0 && (

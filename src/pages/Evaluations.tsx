@@ -44,7 +44,7 @@ export function EvaluationsPage() {
         </div>
       </Card>
       <ErrorBox error={data.error} />
-      {data.loading ? <Loading /> : <Card pad={false}><EvaluationsTable evals={rows} settings={ref.settings} showCam={me!.role !== 'user'} pageSize={25} appealedIds={appealed} canAppeal={me!.role === 'user' ? (e) => appealWindowOpen(e, ref.settings) : undefined} /></Card>}
+      {data.loading ? <Loading /> : <Card pad={false}><EvaluationsTable evals={rows} settings={ref.settings} showCam={me!.role !== 'user'} pageSize={25} appealedIds={appealed} canAppeal={me!.role === 'user' ? (e) => appealWindowOpen(e, ref.settings, ref.periods) : undefined} /></Card>}
     </div>
   );
 }

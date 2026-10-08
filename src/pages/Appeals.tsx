@@ -126,7 +126,8 @@ export function NewAppealPage() {
   // every published week whose appeal window could still be open (the exact deadline is checked per task below)
   const w = ref.settings.appeal_window;
   const horizon = Date.now() - ((w.business_days ? Math.ceil(w.days * 7 / 5) : w.days) + 3) * 86400000;
-  const recent = ref.publishedPeriods.filter((p) => p.published_at && Date.parse(p.published_at) >= horizon).map((p) => p.id);
+  const recent = ref.publishedPeriods.filter((p) => (p.appeal_closes_at ? Date.parse(p.appeal_closes_at) >= Date.now()
+    : !!p.published_at && Date.parse(p.published_at) >= horizon)).map((p) => p.id);
   const evals = useAsync(() => (recent.length ? repo.getEvaluations({ periodIds: recent, camIds: [me!.id] }) : Promise.resolve([])), [recent.join(',')]);
   const deadlines = useAsync(async () => {
     const out: Record<string, string | null> = {};

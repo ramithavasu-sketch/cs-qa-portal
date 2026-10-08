@@ -413,7 +413,9 @@ export class DemoRepo implements Repo {
   }
   private deadline(e: RawEvaluation): Date | null {
     const p = this.s.periods.find((x) => x.id === e.period_id);
-    if (!p || p.status !== 'published' || !p.published_at) return null;
+    if (!p || p.status !== 'published') return null;
+    if (p.appeal_closes_at) return new Date(p.appeal_closes_at);
+    if (!p.published_at) return null;
     const w = this.s.settings.appeal_window;
     const base = new Date(p.published_at);
     return w.business_days ? addBusinessDays(base, w.days) : new Date(base.getTime() + w.days * 86400000);
