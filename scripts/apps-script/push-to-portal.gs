@@ -7,13 +7,16 @@
  *   1. Project Settings → Script Properties → add PORTAL_PUSH_SECRET (the same secret you
  *      saved in Supabase as SHEETS_PUSH_SECRET).
  *   2. Check the TABS list below, then run  pushToPortal  once and click Allow.
- *   3. Run  installTrigger  once so it repeats every 30 minutes.
+ *   3. Run  installTrigger  once. It sets up:
+ *        - onAuditSubmitted : every new audit form submission reaches the portal within seconds
+ *        - everyMinute      : sends portal emails and writes portal score changes into this sheet
+ *        - pushToPortal     : every 30 minutes, a safety-net sync of the audit tab
  * Rows already in the portal are skipped, so running it again is always safe.
  *
  * Score changes made in the portal (approved appeals, QA corrections) are written back too:
  * the original audit row gets the new parameter score and task Score (with a cell note showing
  * the old value and the reason), and every change is listed in the "Portal Score Changes" tab.
- * This runs at the end of every pushToPortal; run  pullScoreChanges  on its own to do just that.
+ * This runs every minute (it only reads the audit tab when there is a change); run  pullScoreChanges  on its own to do just that.
  *
  * Portal emails (invitations, password links, appeal updates, weekly reports) are sent from YOUR
  * Gmail by  sendPortalEmails , which installTrigger schedules every minute. No SMTP is needed.
@@ -23,7 +26,7 @@ const PORTAL_PUSH_URL = 'https://fjctcwhhugkvxfsotzjc.supabase.co/functions/v1/s
 
 /** Tabs to send. source: 'live' for the live form (new weeks arrive as drafts), 'archive' for past years (published). */
 const TABS = [
-  { name: 'Form Responses 1', source: 'live', label: 'New QA Live Task Audit Form (Responses)' },
+  { name: 'Data 2.0', source: 'live', label: 'New QA Live Task Audit Form (Responses)' },
 ];
 
 const CHUNK = 1000;           // rows per request
@@ -31,6 +34,17 @@ const OVERLAP = 50;           // re-send the last rows each time, in case recent
 const TIME_BUDGET_MS = 4.5 * 60 * 1000; // Apps Script stops at 6 minutes; continue on the next run
 
 function pushToPortal() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(60 * 1000)) return 'Another sync is running; this one was skipped';
+  try { return pushToPortalLocked(); } finally { lock.releaseLock(); }
+}
+
+/** Runs the moment someone submits the audit form (installed by installTrigger). */
+function onAuditSubmitted(e) {
+  return pushToPortal();
+}
+
+function pushToPortalLocked() {
   const secret = (PropertiesService.getScriptProperties().getProperty('PORTAL_PUSH_SECRET') || '').trim().replace(/^['"]+|['"]+$/g, '').trim();
   if (!secret) throw new Error('Add PORTAL_PUSH_SECRET under Project Settings → Script Properties first.');
   const started = Date.now();
@@ -66,7 +80,7 @@ function pushToPortal() {
     }
     summary.push(`${tab.name}: ${totals.inserted} new · ${totals.duplicates} already in the portal · ${totals.rejected} rejected`);
   }
-  try { summary.push(pullScoreChanges()); } catch (e) { summary.push('Score changes: ' + e.message); }
+  try { summary.push(pullScoreChangesLocked()); } catch (e) { summary.push('Score changes: ' + e.message); }
   console.log(summary.join('\n'));
   return summary.join('\n');
 }
@@ -78,15 +92,17 @@ const keyOf = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 /** Fetches score changes made in the portal since the last run and writes them into this sheet. */
 function pullScoreChanges() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30 * 1000)) return 'Score changes: another run is busy; will retry next minute';
+  try { return pullScoreChangesLocked(); } finally { lock.releaseLock(); }
+}
+
+function pullScoreChangesLocked() {
   const secret = (PropertiesService.getScriptProperties().getProperty('PORTAL_PUSH_SECRET') || '').trim().replace(/^['"]+|['"]+$/g, '').trim();
   if (!secret) throw new Error('Add PORTAL_PUSH_SECRET under Project Settings → Script Properties first.');
   const props = PropertiesService.getDocumentProperties();
   const book = SpreadsheetApp.getActiveSpreadsheet();
-  let log = book.getSheetByName(CHANGES_TAB);
-  if (!log) { log = book.insertSheet(CHANGES_TAB); log.appendRow(CHANGES_HEADER); log.setFrozenRows(1); log.getRange(1, 1, 1, CHANGES_HEADER.length).setFontWeight('bold'); }
-
-  const live = TABS.filter((t) => t.source === 'live').map((t) => book.getSheetByName(t.name)).filter(Boolean);
-  const index = live.map(indexSheet);
+  let log = null, index = null;   // the audit tab is only read when there is something to write
   let since = props.getProperty('score_changes_since') || null;
   let done = 0, updated = 0;
   for (let round = 0; round < 10; round++) {
@@ -95,6 +111,11 @@ function pullScoreChanges() {
     const body = JSON.parse(res.getContentText() || '{}');
     if (res.getResponseCode() !== 200) throw new Error('Portal refused the score-change request: ' + (body.error || res.getResponseCode()));
     const changes = body.changes || [];
+    if (changes.length && !index) {
+      log = book.getSheetByName(CHANGES_TAB);
+      if (!log) { log = book.insertSheet(CHANGES_TAB); log.appendRow(CHANGES_HEADER); log.setFrozenRows(1); log.getRange(1, 1, 1, CHANGES_HEADER.length).setFontWeight('bold'); }
+      index = TABS.filter((t) => t.source === 'live').map((t) => book.getSheetByName(t.name)).filter(Boolean).map(indexSheet);
+    }
     for (const c of changes) {
       const where = applyChange(index, c);
       if (where) updated++;
@@ -108,7 +129,7 @@ function pullScoreChanges() {
     if (since) props.setProperty('score_changes_since', since);
     if (changes.length < 500) break;
   }
-  return `Score changes: ${done} received from the portal, ${updated} sheet row(s) updated`;
+  return done ? `Score changes: ${done} received from the portal, ${updated} sheet row(s) updated` : 'Score changes: none new';
 }
 
 /** Column positions and a lookup of rows by DS Task Link + CAM Name + QA Week. */
@@ -161,18 +182,30 @@ function pushEverything() {
   return pushToPortal();
 }
 
-/** Run once: syncs audits every 30 minutes and sends portal emails every minute. */
+const TRIGGER_HANDLERS = ['pushToPortal', 'sendPortalEmails', 'everyMinute', 'onAuditSubmitted'];
+
+/** Run once: instant sync on every form submission, emails + score changes every minute, and a 30-minute safety-net sync. */
 function installTrigger() {
-  ScriptApp.getProjectTriggers().filter((t) => ['pushToPortal', 'sendPortalEmails'].includes(t.getHandlerFunction())).forEach((t) => ScriptApp.deleteTrigger(t));
+  ScriptApp.getProjectTriggers().filter((t) => TRIGGER_HANDLERS.includes(t.getHandlerFunction())).forEach((t) => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('onAuditSubmitted').forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet()).onFormSubmit().create();
+  ScriptApp.newTrigger('everyMinute').timeBased().everyMinutes(1).create();
   ScriptApp.newTrigger('pushToPortal').timeBased().everyMinutes(30).create();
-  ScriptApp.newTrigger('sendPortalEmails').timeBased().everyMinutes(1).create();
-  return 'Automatic sync every 30 minutes and email sending every minute are on.';
+  return 'On: new audits sync as soon as the form is submitted; emails and score changes every minute; full sync every 30 minutes.';
 }
 
-/** Run to stop the automatic sync and email sending. */
+/** Run to stop all automatic jobs. */
 function removeTrigger() {
-  ScriptApp.getProjectTriggers().filter((t) => ['pushToPortal', 'sendPortalEmails'].includes(t.getHandlerFunction())).forEach((t) => ScriptApp.deleteTrigger(t));
-  return 'Automatic sync and email sending are off.';
+  ScriptApp.getProjectTriggers().filter((t) => TRIGGER_HANDLERS.includes(t.getHandlerFunction())).forEach((t) => ScriptApp.deleteTrigger(t));
+  return 'Automatic sync, emails and score write-back are off.';
+}
+
+/** Every minute: send queued portal emails, then write any new portal score changes into this sheet. */
+function everyMinute() {
+  const out = [];
+  try { out.push(sendPortalEmails()); } catch (e) { out.push('Emails: ' + e.message); }
+  try { out.push(pullScoreChanges()); } catch (e) { out.push('Score changes: ' + e.message); }
+  console.log(out.join('\n'));
+  return out.join('\n');
 }
 
 /** Sends the portal's queued emails from your Gmail and tells the portal which ones went out. */
