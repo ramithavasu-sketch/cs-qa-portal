@@ -33,6 +33,8 @@ export function UsersPage() {
   const [pwFor, setPwFor] = useState<Employee | null>(null);
   const [page, setPage] = useState(1);
   const isHist = (e: Employee) => e.email.endsWith('@cam-email-needed.invalid');
+  const [bulk, setBulk] = useState(false);
+  const noLogin = ref.employees.filter((e) => e.status === 'active' && !e.auth_user_id && !e.email.endsWith('.invalid') && e.id !== me!.id);
   const list = ref.employees.filter((e) => !isHist(e) && (!q || (e.full_name + e.email).toLowerCase().includes(q.toLowerCase())) && (!role || e.role === role) && (!status || e.status === status));
   const pages = Math.max(1, Math.ceil(list.length / 25));
   const teamName = (id: string | null) => ref.teams.find((t) => t.id === id)?.name ?? '—';
@@ -41,7 +43,10 @@ export function UsersPage() {
       {isLocal && <p className="rounded bg-info-soft px-3 py-2 text-[13px] text-info">Local review mode runs only on this computer, so invitation emails can’t be sent from here. You can set a temporary password for anyone with <strong>Set password</strong> — they can then sign in on this computer only (useful for checking what a Lead or CAM sees). Once the portal is deployed, the same button lets people sign in from anywhere.</p>}
       {isGoogle && <p className="rounded bg-info-soft px-3 py-2 text-[13px] text-info">Everyone signs in with their company Google account — no passwords. Anyone you add here (with their work email) can open the portal link straight away and sees only what their role allows. <strong>Send invite</strong> emails them the link.</p>}
       <PageHeader title="Users & Roles" subtitle={isGoogle ? 'Only people with an active record here can open the portal.' : 'Only people with an active record here can sign in — either by accepting an invitation or with a temporary password you set. Temporary passwords must be changed at first sign-in.'}
-        actions={<Button onClick={() => setEdit({ role: 'user', status: 'active' })}>Add user</Button>} />
+        actions={<>
+          {!isLocal && !isGoogle && <Button variant="secondary" onClick={() => setBulk(true)}>Invite everyone without a login ({noLogin.length})</Button>}
+          <Button onClick={() => setEdit({ role: 'user', status: 'active' })}>Add user</Button>
+        </>} />
       <div className="flex flex-wrap gap-3">
         <input aria-label="Search" className={inputBase + ' w-64'} placeholder="Search name or email" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
         <select aria-label="Role" className={inputBase + ' w-auto'} value={role} onChange={(e) => setRole(e.target.value)}><option value="">All roles</option>{(Object.keys(ROLE_NAME) as Role[]).map((r) => <option key={r} value={r}>{ROLE_NAME[r]}</option>)}</select>
@@ -62,7 +67,9 @@ export function UsersPage() {
                   try { await repo.upsertEmployee({ ...e, status: e.status === 'active' ? 'inactive' : 'active' }); await reloadRef(); toast(e.status === 'active' ? 'User deactivated.' : 'User reactivated.'); } catch (x) { toast(String((x as Error).message), 'bad'); }
                 }}>{e.status === 'active' ? 'Deactivate' : 'Reactivate'}</Button>}
                 {!isGoogle && e.id !== me!.id && e.status === 'active' && !e.email.endsWith('.invalid') && <Button size="sm" variant="ghost" onClick={() => setPwFor(e)}><KeyRound className="h-4 w-4" />{e.auth_user_id ? 'Reset password' : 'Set password'}</Button>}
-                {(isGoogle ? e.id !== me!.id && !e.email.endsWith('.invalid') : !e.auth_user_id) && e.status === 'active' && !isLocal && <Button size="sm" variant="ghost" onClick={async () => { try { await repo.inviteUser(e.id); toast(isDemo ? 'Demo: invitation recorded (no email sent).' : `Invitation emailed to ${e.email}.`); } catch (x) { toast((x as Error).message, 'bad'); } }}>Send invite</Button>}
+                {e.id !== me!.id && !e.email.endsWith('.invalid') && e.status === 'active' && !isLocal && (isGoogle || !e.auth_user_id || !isDemo) && <Button size="sm" variant="ghost" onClick={async () => {
+                  try { await repo.inviteUser(e.id); toast(isDemo ? 'Demo: invitation recorded (no email sent).' : e.auth_user_id && !isGoogle ? `Password link emailed to ${e.email}.` : `Invitation emailed to ${e.email}.`); }
+                  catch (x) { toast((x as Error).message, 'bad'); } }}>{e.auth_user_id && !isGoogle ? 'Send password link' : 'Send invite'}</Button>}
               </td>
             </tr>
           ))}</tbody>
@@ -72,8 +79,44 @@ export function UsersPage() {
       <HistoricalNames />
       {isLocal && <SetupTransferCard />}
       {edit && <UserModal value={edit} teams={ref.teams} isSelf={edit.id === me!.id} ledTeams={edit.id ? ref.teams.filter((t) => t.lead_id === edit.id).map((t) => t.name) : []} onClose={() => setEdit(null)} onSaved={async () => { await reloadRef(); setEdit(null); toast('User saved.'); }} />}
+      {bulk && <BulkInviteModal people={noLogin} onClose={() => { setBulk(false); void reloadRef(); }} />}
       {pwFor && <SetPasswordModal user={pwFor} onClose={() => setPwFor(null)} onSaved={reloadRef} />}
     </div>
+  );
+}
+
+/** Sends invitations one by one and stops at the first email error (e.g. the hourly email limit), so nothing is skipped silently. */
+function BulkInviteModal({ people, onClose }: { people: Employee[]; onClose: () => void }) {
+  const [running, setRunning] = useState(false);
+  const [done, setDone] = useState<string[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const run = async () => {
+    setRunning(true); setErr(null);
+    for (const p of people) {
+      if (done.includes(p.id)) continue;
+      try { await repo.inviteUser(p.id); setDone((d) => [...d, p.id]); }
+      catch (x) { setErr(`Stopped at ${p.full_name} (${p.email}): ${(x as Error).message}`); break; }
+    }
+    setRunning(false);
+  };
+  const left = people.filter((p) => !done.includes(p.id));
+  return (
+    <Modal open title="Invite everyone without a login" onClose={onClose} footer={<>
+      <Button variant="secondary" onClick={onClose} disabled={running}>Close</Button>
+      {left.length > 0 && <Button loading={running} onClick={run}>{done.length ? `Continue (${left.length} left)` : `Send ${left.length} invitation(s)`}</Button>}
+    </>}>
+      <div className="flex flex-col gap-3 text-[13.5px]">
+        <p>Each person gets an email with a link to choose their own password. {done.length > 0 && <strong className="text-good">{done.length} sent.</strong>}</p>
+        <p className="text-[12.5px] text-muted">Supabase limits how many emails go out per hour (Authentication → Rate Limits). If the limit is reached, sending stops here; press Continue later to send the rest.</p>
+        {err && <ErrorBox error={new Error(err)} />}
+        <div className="max-h-64 overflow-auto rounded border border-line">
+          <ul className="divide-y divide-line">{people.map((p) => (
+            <li key={p.id} className="flex items-center justify-between gap-2 px-3 py-1.5"><span>{p.full_name} <span className="text-muted">· {p.email}</span></span>
+              {done.includes(p.id) ? <Pill tone="good">Sent</Pill> : <Pill>Waiting</Pill>}</li>
+          ))}</ul>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

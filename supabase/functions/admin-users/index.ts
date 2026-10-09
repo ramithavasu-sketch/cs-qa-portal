@@ -1,4 +1,5 @@
-// POST { action: 'invite', employee_id, redirect_to }       -> sends a Supabase Auth invitation
+// POST { action: 'invite', employee_id, redirect_to }       -> sends a Supabase Auth invitation (or, if they already
+//                                                          have a login, a link to set their own password)
 // POST { action: 'set_password', employee_id, password } -> creates the login (or resets it) with a temporary password;
 //                                                          the user must change it at first sign-in. Never logged or returned.
 // POST { action: 'deactivate' | 'reactivate', employee_id } -> blocks/unblocks the login and revokes sessions
@@ -15,6 +16,14 @@ Deno.serve(async (req) => {
 
     if (body.action === 'invite') {
       if (emp.status !== 'active') throw new HttpError(400, 'Reactivate the user before inviting');
+      if (String(emp.email).endsWith('.invalid')) throw new HttpError(400, 'Add this person’s real email address first');
+      if (emp.auth_user_id) {
+        // Already has a login: email a link to set (or reset) their own password instead of an invitation.
+        const { error } = await admin.auth.resetPasswordForEmail(emp.email, { redirectTo: body.redirect_to });
+        if (error) throw new HttpError(400, error.message);
+        await admin.from('audit_logs').insert({ actor_id: actor.id, action: 'password_link', table_name: 'employees', record_id: emp.id, new_value: { email: emp.email } });
+        return json({ ok: true, sent: 'password_link' });
+      }
       // must_change_password: the invitation link signs them in once; the portal then asks them to choose their own password
       const { data, error } = await admin.auth.admin.inviteUserByEmail(emp.email, { redirectTo: body.redirect_to, data: { must_change_password: true } });
       if (error) throw new HttpError(400, error.message);
