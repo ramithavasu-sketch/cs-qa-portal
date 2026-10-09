@@ -81,9 +81,15 @@ export class SupabaseRepo implements Repo {
   }
   async signOut() { await this.sb.auth.signOut(); }
   async requestPasswordReset(email: string) {
-    const redirectTo = `${window.location.origin}${window.location.pathname}`;
-    const { error } = await this.sb.auth.resetPasswordForEmail(email.trim().toLowerCase(), { redirectTo });
-    if (error) throw new Error(error.message);
+    // Server decides how the email is sent (from the QA owner's Gmail via the sheet script, or Supabase).
+    const redirect_to = `${window.location.origin}${window.location.pathname}`;
+    const { data, error } = await this.sb.functions.invoke('password-reset', { body: { email: email.trim().toLowerCase(), redirect_to } });
+    if (error) throw new Error(await fnErrorMessage(error));
+    if (data?.error) throw new Error(data.error);
+  }
+  async verifyEmailLink(tokenHash: string, type: 'invite' | 'recovery') {
+    const { error } = await this.sb.auth.verifyOtp({ token_hash: tokenHash, type });
+    if (error) throw new Error(/expired|invalid/i.test(error.message) ? 'This link has expired or was already used. Ask the QA team for a new one, or use “Forgot password?”.' : error.message);
   }
   async updatePassword(password: string) {
     const { error } = await this.sb.auth.updateUser({ password, data: { must_change_password: false } });
@@ -318,6 +324,8 @@ export class SupabaseRepo implements Repo {
   async sendWeeklyEmails(periodId: string, camIds: string[] | null, resend: boolean) {
     const q = await this.rpc<{ queued: number; skipped: number; no_email: number }>('queue_weekly_report_emails', { p_period: periodId, p_cam_ids: camIds, p_resend: resend });
     let sent = 0, failed = 0; let failures: { to: string; error: string }[] = [];
+    const notif = unwrap(await this.sb.from('settings').select('value').eq('key', 'notifications').maybeSingle()) as { value?: { mail_route?: string } } | null;
+    if (notif?.value?.mail_route === 'sheet') return { ...q, sent, failed, failures, via_sheet: true };
     if (q.queued > 0) {
       // deliver immediately (the send-email function also runs on a schedule as a retry)
       const { data, error } = await this.sb.functions.invoke('send-email', { body: { kind: 'weekly_report' } });

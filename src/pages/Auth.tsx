@@ -1,11 +1,11 @@
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { ShieldCheck } from 'lucide-react';
 import { useApp } from '../app/context';
 import { repo, demoRepo, localRepo, isGoogle } from '../data';
 import { googleIdentity } from '../data/googleRepo';
 import { DEMO_PASSWORD } from '../demo/generate';
-import { Button, ErrorBox, Field, inputCls } from '../components/ui';
+import { Button, ErrorBox, Field, Loading, inputCls } from '../components/ui';
 
 function Shell({ children, title, subtitle }: { children: React.ReactNode; title: string; subtitle?: string }) {
   return (
@@ -166,7 +166,7 @@ export function ResetPasswordPage() {
   const strong = pw.length >= 10 && /[A-Za-z]/.test(pw) && /\d/.test(pw);
   return (
     <Shell title={firstLogin ? 'Set your own password' : 'Choose a new password'} subtitle={firstLogin
-      ? 'You signed in with a temporary password from the QA team. Choose your own to continue — at least 10 characters, including a letter and a number.'
+      ? 'Choose your own password to continue — at least 10 characters, including a letter and a number.'
       : 'At least 10 characters, including a letter and a number.'}>
       <form className="flex flex-col gap-4" onSubmit={async (e) => {
         e.preventDefault(); setErr(null);
@@ -182,6 +182,33 @@ export function ResetPasswordPage() {
         <ErrorBox error={err} />
         <Button type="submit" loading={busy}>Update password</Button>
       </form>
+    </Shell>
+  );
+}
+
+/** Landing page for emailed one-time links (#/auth-confirm?type=invite|recovery&token_hash=…). */
+export function AuthConfirmPage() {
+  const [sp] = useSearchParams();
+  const nav = useNavigate();
+  const { setRecovery, refreshMe } = useApp();
+  const [err, setErr] = useState<unknown>(null);
+  const started = useRef(false);
+  useEffect(() => {
+    if (started.current) return; started.current = true;
+    const type = sp.get('type') === 'invite' ? 'invite' : 'recovery';
+    const token = sp.get('token_hash') ?? '';
+    (async () => {
+      try {
+        if (!token) throw new Error('This link is incomplete. Open it again from the email.');
+        await repo.verifyEmailLink(token, type);
+        setRecovery(true); await refreshMe(); nav('/reset-password', { replace: true });
+      } catch (x) { setErr(x); }
+    })();
+  }, [sp, nav, setRecovery, refreshMe]);
+  return (
+    <Shell title={err ? 'This link didn’t work' : 'Opening your link…'}>
+      {err ? <div className="flex flex-col gap-3 text-[13.5px]"><ErrorBox error={err} /><Link to="/forgot-password" className="text-brand hover:underline">Send me a new password link</Link></div>
+        : <Loading label="Checking your link…" />}
     </Shell>
   );
 }

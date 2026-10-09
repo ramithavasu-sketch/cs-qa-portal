@@ -101,7 +101,7 @@ export default function WeeklyEmailsPage() {
         onConfirm={async () => {
           const r = await repo.sendWeeklyEmails(periodId, confirm!.ids, confirm!.resend);
           setResult(r); setSel(new Set()); bump();
-          toast(r.failed ? `${r.sent} sent, ${r.failed} failed — see the list.` : `${r.sent} email(s) sent${isDemo ? ' (demo: not delivered)' : ''}.`, r.failed ? 'bad' : 'good');
+          toast(r.via_sheet ? `${r.queued} email(s) queued. Your Google Sheet script sends them from your Gmail within about a minute.` : r.failed ? `${r.sent} sent, ${r.failed} failed — see the list.` : `${r.sent} email(s) sent${isDemo ? ' (demo: not delivered)' : ''}.`, r.failed ? 'bad' : 'good');
         }}
         body={<p>Send the {period?.short_label} report email to {confirm?.count} CAM(s) ({confirm?.label}), each with their Team Lead in CC. This can’t be undone.</p>} />
     </div>

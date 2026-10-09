@@ -517,6 +517,7 @@ export class DemoRepo implements Repo {
     this.listeners.forEach((l) => l('SIGNED_OUT'));
   }
   async requestPasswordReset() { await delay(300); }
+  async verifyEmailLink(): Promise<void> { throw new Error('Email links are not used in the demo.'); }
   async updatePassword(password: string) {
     const me = this.me();
     this.require(password.length >= 10, 'Password must be at least 10 characters');

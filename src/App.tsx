@@ -3,7 +3,7 @@ import { useEffect, type ReactNode } from 'react';
 import { AppProvider, useApp } from './app/context';
 import { ToastProvider, Loading } from './components/ui';
 import Layout from './components/Layout';
-import { LoginPage, ForgotPasswordPage, ResetPasswordPage } from './pages/Auth';
+import { LoginPage, ForgotPasswordPage, ResetPasswordPage, AuthConfirmPage } from './pages/Auth';
 import CamDashboard from './pages/CamDashboard';
 import LeadDashboard from './pages/LeadDashboard';
 import MyAuditsPage from './pages/MyAudits';
@@ -62,6 +62,7 @@ export default function App() {
             <Route path="/login" element={<LoginRoute />} />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/auth-confirm" element={<AuthConfirmPage />} />
             <Route element={<RequireAuth><Layout /></RequireAuth>}>
               <Route index element={<HomeByRole />} />
               <Route path="cams/:camId" element={<RequireRole roles={STAFF}><CamDashboard /></RequireRole>} />

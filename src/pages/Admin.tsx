@@ -68,7 +68,9 @@ export function UsersPage() {
                 }}>{e.status === 'active' ? 'Deactivate' : 'Reactivate'}</Button>}
                 {!isGoogle && e.id !== me!.id && e.status === 'active' && !e.email.endsWith('.invalid') && <Button size="sm" variant="ghost" onClick={() => setPwFor(e)}><KeyRound className="h-4 w-4" />{e.auth_user_id ? 'Reset password' : 'Set password'}</Button>}
                 {e.id !== me!.id && !e.email.endsWith('.invalid') && e.status === 'active' && !isLocal && (isGoogle || !e.auth_user_id || !isDemo) && <Button size="sm" variant="ghost" onClick={async () => {
-                  try { await repo.inviteUser(e.id); toast(isDemo ? 'Demo: invitation recorded (no email sent).' : e.auth_user_id && !isGoogle ? `Password link emailed to ${e.email}.` : `Invitation emailed to ${e.email}.`); }
+                  try { await repo.inviteUser(e.id); toast(isDemo ? 'Demo: invitation recorded (no email sent).' : ref.settings.notifications.mail_route === 'sheet'
+                    ? `${e.auth_user_id ? 'Password link' : 'Invitation'} for ${e.email} queued. Your Google Sheet script sends it from your Gmail within about a minute.`
+                    : e.auth_user_id && !isGoogle ? `Password link emailed to ${e.email}.` : `Invitation emailed to ${e.email}.`); }
                   catch (x) { toast((x as Error).message, 'bad'); } }}>{e.auth_user_id && !isGoogle ? 'Send password link' : 'Send invite'}</Button>}
               </td>
             </tr>
@@ -513,6 +515,9 @@ export function PeriodsPage() {
         </Card>
         <Card title="Notifications" actions={<Button size="sm" loading={busy === 'notifications'} onClick={() => saveKey('notifications')}>Save</Button>}>
           <div className="flex flex-col gap-3 text-[13px]">
+            <Field label="Send portal emails through" htmlFor="s-route" hint="Your Google Sheet script sends invitations, password links, notifications and weekly reports from your Gmail (run installTrigger in the script once). Supabase email needs working SMTP.">
+              <select id="s-route" className={inputCls} value={s.notifications.mail_route ?? 'supabase'} onChange={(e) => setS({ ...s, notifications: { ...s.notifications, mail_route: e.target.value as 'sheet' | 'supabase' } })}>
+                <option value="sheet">My Gmail, via the Google Sheet script</option><option value="supabase">Supabase email (SMTP)</option></select></Field>
             <label htmlFor="s-email" className="flex items-center gap-2"><input id="s-email" type="checkbox" checked={s.notifications.email_enabled} onChange={(e) => setS({ ...s, notifications: { ...s.notifications, email_enabled: e.target.checked } })} />Send email notifications (in addition to in-app)</label>
             <Field label="Portal URL used in email links" htmlFor="s-url"><input id="s-url" className={inputCls} value={s.notifications.portal_url} placeholder="https://qa-portal.your-domain.com/#" onChange={(e) => setS({ ...s, notifications: { ...s.notifications, portal_url: e.target.value } })} /></Field>
             <table className="w-full text-[13px]">

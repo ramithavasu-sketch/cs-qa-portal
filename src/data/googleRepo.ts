@@ -95,6 +95,7 @@ const local: Partial<Repo> & { mode: 'google' } = {
   signIn: notHere('Password sign-in'),
   async signOut() { /* Google manages the session; the page just goes back to the start */ },
   requestPasswordReset: notHere('Password reset'),
+  verifyEmailLink: notHere('Email sign-in links'),
   updatePassword: notHere('Changing a password'),
   setUserPassword: notHere('Setting a password'),
   onAuthEvent() { return () => {}; },

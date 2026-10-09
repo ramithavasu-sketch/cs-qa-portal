@@ -4,6 +4,7 @@
 //                                                          the user must change it at first sign-in. Never logged or returned.
 // POST { action: 'deactivate' | 'reactivate', employee_id } -> blocks/unblocks the login and revokes sessions
 import { cors, json, serviceClient, requireSuperAdmin, HttpError } from '../_shared/auth.ts';
+import { mailSettings, queueAuthEmail } from '../_shared/authmail.ts';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
@@ -17,6 +18,13 @@ Deno.serve(async (req) => {
     if (body.action === 'invite') {
       if (emp.status !== 'active') throw new HttpError(400, 'Reactivate the user before inviting');
       if (String(emp.email).endsWith('.invalid')) throw new HttpError(400, 'Add this person’s real email address first');
+      const mail = await mailSettings(admin);
+      if (mail.viaSheet) {
+        // Sent from the QA owner's Gmail by the audit sheet's script (no SMTP needed).
+        await queueAuthEmail(admin, { email: emp.email, name: emp.full_name, kind: emp.auth_user_id ? 'recovery' : 'invite', portalUrl: mail.portalUrl });
+        await admin.from('audit_logs').insert({ actor_id: actor.id, action: emp.auth_user_id ? 'password_link' : 'invite', table_name: 'employees', record_id: emp.id, new_value: { email: emp.email, via: 'sheet' } });
+        return json({ ok: true, queued: true });
+      }
       if (emp.auth_user_id) {
         // Already has a login: email a link to set (or reset) their own password instead of an invitation.
         const { error } = await admin.auth.resetPasswordForEmail(emp.email, { redirectTo: body.redirect_to });

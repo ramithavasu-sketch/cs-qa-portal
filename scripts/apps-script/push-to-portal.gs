@@ -14,6 +14,9 @@
  * the original audit row gets the new parameter score and task Score (with a cell note showing
  * the old value and the reason), and every change is listed in the "Portal Score Changes" tab.
  * This runs at the end of every pushToPortal; run  pullScoreChanges  on its own to do just that.
+ *
+ * Portal emails (invitations, password links, appeal updates, weekly reports) are sent from YOUR
+ * Gmail by  sendPortalEmails , which installTrigger schedules every minute. No SMTP is needed.
  */
 
 const PORTAL_PUSH_URL = 'https://fjctcwhhugkvxfsotzjc.supabase.co/functions/v1/sheets-push';
@@ -158,15 +161,50 @@ function pushEverything() {
   return pushToPortal();
 }
 
-/** Run once: repeats pushToPortal every 30 minutes. */
+/** Run once: syncs audits every 30 minutes and sends portal emails every minute. */
 function installTrigger() {
-  ScriptApp.getProjectTriggers().filter((t) => t.getHandlerFunction() === 'pushToPortal').forEach((t) => ScriptApp.deleteTrigger(t));
+  ScriptApp.getProjectTriggers().filter((t) => ['pushToPortal', 'sendPortalEmails'].includes(t.getHandlerFunction())).forEach((t) => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('pushToPortal').timeBased().everyMinutes(30).create();
-  return 'Automatic sync every 30 minutes is on.';
+  ScriptApp.newTrigger('sendPortalEmails').timeBased().everyMinutes(1).create();
+  return 'Automatic sync every 30 minutes and email sending every minute are on.';
 }
 
-/** Run to stop the automatic sync. */
+/** Run to stop the automatic sync and email sending. */
 function removeTrigger() {
-  ScriptApp.getProjectTriggers().filter((t) => t.getHandlerFunction() === 'pushToPortal').forEach((t) => ScriptApp.deleteTrigger(t));
-  return 'Automatic sync is off.';
+  ScriptApp.getProjectTriggers().filter((t) => ['pushToPortal', 'sendPortalEmails'].includes(t.getHandlerFunction())).forEach((t) => ScriptApp.deleteTrigger(t));
+  return 'Automatic sync and email sending are off.';
+}
+
+/** Sends the portal's queued emails from your Gmail and tells the portal which ones went out. */
+function sendPortalEmails() {
+  const secret = (PropertiesService.getScriptProperties().getProperty('PORTAL_PUSH_SECRET') || '').trim().replace(/^['"]+|['"]+$/g, '').trim();
+  if (!secret) throw new Error('Add PORTAL_PUSH_SECRET under Project Settings → Script Properties first.');
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return 'Another run is already sending emails';
+  try {
+    const call = (payload) => {
+      const res = UrlFetchApp.fetch(PORTAL_PUSH_URL, { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+        headers: { 'x-push-secret': secret }, payload: JSON.stringify(payload) });
+      const body = JSON.parse(res.getContentText() || '{}');
+      if (res.getResponseCode() !== 200) throw new Error('Portal refused the email request: ' + (body.error || res.getResponseCode()));
+      return body;
+    };
+    const emails = call({ action: 'outbox' }).emails || [];
+    if (!emails.length) return 'No portal emails waiting';
+    const results = [];
+    for (const m of emails) {
+      if (MailApp.getRemainingDailyQuota() < (m.cc_email ? 2 : 1)) { results.push({ id: m.id, ok: false, error: 'Daily Gmail sending limit reached; will retry tomorrow' }); continue; }
+      try {
+        const opts = { to: m.recipient_email, subject: m.subject, body: m.body_text, name: 'CS QA Portal' };
+        if (m.body_html) opts.htmlBody = m.body_html;
+        if (m.cc_email) opts.cc = m.cc_email;
+        if (m.reply_to) opts.replyTo = m.reply_to;
+        MailApp.sendEmail(opts);
+        results.push({ id: m.id, ok: true });
+      } catch (e) { results.push({ id: m.id, ok: false, error: String(e.message || e) }); }
+    }
+    call({ action: 'outbox_done', results });
+    const ok = results.filter((r) => r.ok).length;
+    return `Portal emails: ${ok} sent, ${results.length - ok} failed`;
+  } finally { lock.releaseLock(); }
 }

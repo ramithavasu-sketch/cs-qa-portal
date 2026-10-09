@@ -22,6 +22,8 @@ export interface Repo {
   signIn(email: string, password: string): Promise<Me>;
   signOut(): Promise<void>;
   requestPasswordReset(email: string): Promise<void>;
+  /** Sign in from an emailed one-time link (invitation or password link) so the person can choose a password. */
+  verifyEmailLink(tokenHash: string, type: 'invite' | 'recovery'): Promise<void>;
   updatePassword(password: string): Promise<void>;
   onAuthEvent(cb: (event: 'SIGNED_IN' | 'SIGNED_OUT' | 'PASSWORD_RECOVERY') => void): () => void;
 

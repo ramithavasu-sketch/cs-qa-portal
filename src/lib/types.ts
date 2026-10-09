@@ -146,7 +146,7 @@ export interface WeeklyEmailRow {
   cam_id: string; cam_name: string; cam_email: string; cam_active: boolean; lead_name: string | null; lead_email: string | null;
   tasks: number; last_status: 'queued' | 'sent' | 'failed' | 'skipped' | null; last_sent_at: string | null; last_error: string | null; last_queued_at: string | null;
 }
-export interface WeeklyEmailResult { queued: number; skipped: number; no_email: number; sent: number; failed: number; failures: { to: string; error: string }[] }
+export interface WeeklyEmailResult { queued: number; skipped: number; no_email: number; sent: number; failed: number; failures: { to: string; error: string }[]; /** queued for the sheet script to send from Gmail */ via_sheet?: boolean }
 export interface TeamMappingRow { cam_email: string; cam_name?: string; lead_email: string; lead_name?: string; team?: string }
 export interface TeamMappingResult { rows: number; new_leads: number; new_teams: number; new_cams: number; reassigned: number; rejected: number; errors: { row: number; reason: string }[] }
 export interface HistoricalCam { id: string; name: string; tasks: number; first_week: string | null; last_week: string | null; candidates: { id: string; name: string; email: string }[] }

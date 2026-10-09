@@ -33,6 +33,30 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => null) as { action?: string; since?: string; source?: string; label?: string; header?: unknown; rows?: unknown; first_row?: number } | null;
 
+    // Portal emails to send from the QA owner's Gmail (invites, password links, notifications, weekly reports).
+    if (body?.action === 'outbox') {
+      const { data, error } = await serviceClient().from('email_outbox').select('id, recipient_email, cc_email, reply_to, subject, body_text, body_html, kind')
+        .eq('status', 'queued').lt('attempts', 3).order('created_at').limit(40);
+      if (error) throw new HttpError(500, error.message);
+      return json({ emails: data ?? [] });
+    }
+    if (body?.action === 'outbox_done') {
+      const results = Array.isArray((body as { results?: unknown }).results) ? (body as { results: { id: string; ok: boolean; error?: string }[] }).results : [];
+      const sb = serviceClient();
+      for (const r of results.slice(0, 100)) {
+        const { data: row } = await sb.from('email_outbox').select('attempts, kind').eq('id', r.id).maybeSingle();
+        if (!row) continue;
+        if (r.ok) {
+          // once sent, remove one-time sign-in links from the stored copy
+          const scrub = row.kind === 'auth' ? { body_text: '(sent — link removed)', body_html: null } : {};
+          await sb.from('email_outbox').update({ status: 'sent', sent_at: new Date().toISOString(), attempts: row.attempts + 1, last_error: null, ...scrub }).eq('id', r.id);
+        } else {
+          await sb.from('email_outbox').update({ status: row.attempts + 1 >= 3 ? 'failed' : 'queued', attempts: row.attempts + 1, last_error: String(r.error ?? 'failed').slice(0, 500) }).eq('id', r.id);
+        }
+      }
+      return json({ ok: true });
+    }
+
     // Score changes made in the portal (appeals, QA corrections), for writing back to the sheet.
     if (body?.action === 'changes') {
       const since = body.since && !Number.isNaN(Date.parse(body.since)) ? body.since : null;

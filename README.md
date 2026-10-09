@@ -257,6 +257,14 @@ Once a week is published, **QA administration → Weekly Report Emails** lists e
 
 **Team Lead emails (CC).** The audit sheet only has Lead *names*. Load the Lead emails once with **Teams & Assignments → Import CAM ↔ Team Lead mapping**, using a CSV or Excel file with the columns *CAM Email, CAM Name, Lead Email, Lead Name, Team*. This file also creates the Lead logins and sets which CAMs each Lead can see.
 
+## 5a-2. Emails from your Gmail (no SMTP)
+
+When the company's Google Workspace blocks SMTP, set **Reporting & Settings → Notifications → Send portal emails through: My Gmail, via the Google Sheet script** (the live project uses this). Then:
+* **Send invite / Send password link** (Users & Roles) and **Forgot password?** create a one-time link (Supabase sends nothing) and queue the email.
+* The sheet script's `sendPortalEmails` (scheduled every minute by `installTrigger`) sends queued emails — invitations, password links, appeal notifications and weekly reports — from the script owner's Gmail with `MailApp`, then reports back. One-time links are removed from the stored copy once sent.
+* The link opens `#/auth-confirm`, which signs the person in once and takes them to **Choose your password**.
+* Limits: Gmail allows about 1,500 recipients a day; invitation links expire after 24 hours, password links after 1 hour.
+
 ## 5b. Roles
 
 | Role | Who | Can |

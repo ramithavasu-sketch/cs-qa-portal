@@ -18,5 +18,7 @@ verify_jwt = true
 verify_jwt = false   # accepts either a Super Admin JWT (checked in code) or the cron secret
 [functions.sheets-push]
 verify_jwt = false   # called by the sheet's Apps Script; checked with the SHEETS_PUSH_SECRET header
+[functions.password-reset]
+verify_jwt = false   # 'Forgot password?' on the sign-in page (no login yet)
 [functions.send-email]
 verify_jwt = false

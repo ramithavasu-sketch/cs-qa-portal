@@ -118,6 +118,8 @@ export interface PortalSettings {
   notifications: {
     email_enabled: boolean;
     portal_url: string;
+    /** 'sheet' = emails are sent from the QA owner's Gmail by the audit sheet's Apps Script; otherwise Supabase/SMTP. */
+    mail_route?: 'sheet' | 'supabase';
     in_app: Record<string, boolean>;
     email: Record<string, boolean>;
   };
