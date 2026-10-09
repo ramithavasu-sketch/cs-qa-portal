@@ -14,7 +14,7 @@ export default function MyAuditsPage() {
   const { me } = useApp();
   const ref = useRef_();
   const [sel, setSel, periods] = usePeriodSelection(true);
-  const data = useScopeData(sel);
+  const data = useScopeData(sel, undefined, 0); // this page shows the selected period only
   const isSuper = me!.role === 'super_admin';
   const myEmail = me!.email.toLowerCase();
   const evaluators = useMemo(() => {

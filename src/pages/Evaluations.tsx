@@ -16,7 +16,7 @@ export function EvaluationsPage() {
   const { me } = useApp();
   const ref = useRef_();
   const [sel, setSel, periods] = usePeriodSelection(isQaRole(me!.role));
-  const data = useScopeData(sel);
+  const data = useScopeData(sel, undefined, 0); // this page shows the selected period only
   const [type, setType] = useState('');
   const [cam, setCam] = useState('');
   const [only, setOnly] = useState<'' | 'deducted' | 'autofail' | 'adjusted'>('');

@@ -28,6 +28,8 @@ export async function queueAuthEmail(admin: SupabaseClient, p: { email: string; 
   const expiry = invite ? 'The link works once and expires in 24 hours.' : 'The link works once and expires in 1 hour. If you didn’t ask for this, you can ignore this email.';
   const body_text = `Hello ${first},\n\n${lead}\n\nChoose your password here:\n${link}\n\n${expiry}\n\nCS QA Portal`;
   const body_html = `<p>Hello ${esc(first)},</p><p>${esc(lead)}</p><p><a href="${esc(link)}" style="display:inline-block;padding:10px 16px;background:#0e7478;color:#fff;border-radius:6px;text-decoration:none">Choose your password</a></p><p style="color:#555">${esc(expiry)}</p><p>CS QA Portal</p>`;
+  // a new link cancels the previous one, so drop any older unsent sign-in email to the same person
+  await admin.from('email_outbox').delete().eq('recipient_email', p.email).eq('kind', 'auth').eq('status', 'queued');
   const { error: qe } = await admin.from('email_outbox').insert({ recipient_email: p.email, subject, body_text, body_html, kind: 'auth' });
   if (qe) throw new HttpError(500, qe.message);
 }

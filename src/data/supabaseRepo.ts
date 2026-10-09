@@ -23,6 +23,16 @@ async function fetchAll<T>(build: (from: number, to: number) => PromiseLike<{ da
   }
 }
 
+/** Runs async jobs with at most `n` in flight (keeps the browser and the database comfortable). */
+async function pool<T>(jobs: (() => Promise<T>)[], n = 6): Promise<T[]> {
+  const out: T[] = new Array(jobs.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(n, jobs.length) }, async () => {
+    while (next < jobs.length) { const i = next++; out[i] = await jobs[i](); }
+  }));
+  return out;
+}
+
 const chunks = <T,>(arr: T[], n: number) => Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i * n, i * n + n));
 
 /** Edge Functions answer errors as JSON { error }; supabase-js only says "non-2xx status code". Show the real reason. */
@@ -69,7 +79,7 @@ export class SupabaseRepo implements Repo {
     }
     return { ...emp, team_name, lead_name, must_change_password: data.user.user_metadata?.must_change_password === true };
   }
-  async signIn(email: string, password: string): Promise<Me> {
+  async signIn(email: string, password: string): Promise<Me> { this.invalidate();
     const { error } = await this.sb.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
     if (error) throw new Error(error.message === 'Invalid login credentials' ? 'Incorrect email or password.' : error.message);
     const me = await this.currentUser();
@@ -79,7 +89,7 @@ export class SupabaseRepo implements Repo {
     }
     return me;
   }
-  async signOut() { await this.sb.auth.signOut(); }
+  async signOut() { this.invalidate(); await this.sb.auth.signOut(); }
   async requestPasswordReset(email: string) {
     // Server decides how the email is sent (from the QA owner's Gmail via the sheet script, or Supabase).
     const redirect_to = `${window.location.origin}${window.location.pathname}`;
@@ -121,8 +131,9 @@ export class SupabaseRepo implements Repo {
   // ---------------------------------------------------------------- evaluations
   private async attachScores(evals: Omit<Evaluation, 'scores'>[]): Promise<Evaluation[]> {
     const byEval = new Map<string, ScoreRow[]>();
-    for (const ids of chunks(evals.map((e) => e.id), CHUNK)) {
-      const rows = await fetchAll<ScoreRow>((a, b) => this.sb.from('v_evaluation_scores_effective').select('*').in('evaluation_id', ids).range(a, b));
+    const parts = await pool(chunks(evals.map((e) => e.id), CHUNK).map((ids) => () =>
+      fetchAll<ScoreRow>((a, b) => this.sb.from('v_evaluation_scores_effective').select('*').in('evaluation_id', ids).range(a, b))));
+    for (const rows of parts) {
       for (const r of rows) {
         const x = { ...r, max_score: Number(r.max_score), earned: r.earned === null ? null : Number(r.earned), original_earned: r.original_earned === null ? null : Number(r.original_earned) };
         byEval.set(r.evaluation_id, [...(byEval.get(r.evaluation_id) ?? []), x]);
@@ -133,18 +144,39 @@ export class SupabaseRepo implements Repo {
       scores: (byEval.get(e.id) ?? []).sort((a, b) => a.sort_order - b.sort_order),
     }));
   }
+  // Weeks already loaded are kept for a few minutes, so switching weeks only fetches what is new.
+  // Any change made through the portal clears the cache (see invalidate()).
+  private evalCache = new Map<string, { at: number; rows: Evaluation[] }>();
+  private invalidate() { this.evalCache.clear(); }
   async getEvaluations(filter: { periodIds?: string[]; camIds?: string[] }) {
-    const rows: Omit<Evaluation, 'scores'>[] = [];
-    const periodChunks = filter.periodIds ? chunks(filter.periodIds, CHUNK) : [null];
-    for (const pc of periodChunks) {
-      rows.push(...(await fetchAll<Omit<Evaluation, 'scores'>>((a, b) => {
-        let q = this.sb.from('v_evaluations_effective').select('*').order('audited_at', { ascending: false });
-        if (pc) q = q.in('period_id', pc);
-        if (filter.camIds) q = q.in('cam_id', filter.camIds);
-        return q.range(a, b);
-      })));
+    if (!filter.periodIds) return this.loadEvaluations(filter);
+    const camKey = filter.camIds ? [...filter.camIds].sort().join(',') : '*';
+    const fresh = Date.now() - 5 * 60_000;
+    const out: Evaluation[] = []; const missing: string[] = [];
+    for (const pid of filter.periodIds) {
+      const c = this.evalCache.get(`${pid}|${camKey}`);
+      if (c && c.at > fresh) out.push(...c.rows); else missing.push(pid);
     }
-    return this.attachScores(rows);
+    if (missing.length) {
+      const rows = await this.loadEvaluations({ periodIds: missing, camIds: filter.camIds });
+      const byPeriod = new Map<string, Evaluation[]>(missing.map((p) => [p, []]));
+      for (const r of rows) byPeriod.get(r.period_id)?.push(r);
+      const at = Date.now();
+      for (const [pid, list] of byPeriod) this.evalCache.set(`${pid}|${camKey}`, { at, rows: list });
+      out.push(...rows);
+    }
+    return out.sort((a, b) => b.audited_at.localeCompare(a.audited_at));
+  }
+  private async loadEvaluations(filter: { periodIds?: string[]; camIds?: string[] }) {
+    // a few weeks per request, several requests at once
+    const groups = filter.periodIds ? chunks(filter.periodIds, 3) : [null];
+    const parts = await pool(groups.map((pc) => () => fetchAll<Omit<Evaluation, 'scores'>>((a, b) => {
+      let q = this.sb.from('v_evaluations_effective').select('*').order('audited_at', { ascending: false });
+      if (pc) q = q.in('period_id', pc);
+      if (filter.camIds) q = q.in('cam_id', filter.camIds);
+      return q.range(a, b);
+    })), 4);
+    return this.attachScores(parts.flat());
   }
   async getEvaluation(id: string) {
     const row = unwrap(await this.sb.from('v_evaluations_effective').select('*').eq('id', id).maybeSingle()) as Omit<Evaluation, 'scores'> | null;
@@ -205,6 +237,7 @@ export class SupabaseRepo implements Repo {
     };
   }
   private async rpc<T = unknown>(fn: string, args: Record<string, unknown>): Promise<T> {
+    this.invalidate();
     const { data, error } = await this.sb.rpc(fn, args);
     if (error) throw new Error(error.message);
     return data as T;
@@ -247,15 +280,15 @@ export class SupabaseRepo implements Repo {
     await this.rpc('admin_adjust_score', { p_evaluation: evaluationId, p_parameter: parameterId, p_revised: revised, p_reason: reason });
   }
   async setPeriodStatus(periodId: string, status: 'draft' | 'published') { await this.rpc('set_period_status', { p_period: periodId, p_status: status }); }
-  async upsertPeriod(p: Partial<Period> & { label: string; start_date: string; end_date: string }) {
+  async upsertPeriod(p: Partial<Period> & { label: string; start_date: string; end_date: string }) { this.invalidate();
     unwrap(await this.sb.from('reporting_periods').upsert({ ...p }, { onConflict: 'label' }).select());
   }
   async updateSetting(key: string, value: unknown) {
     unwrap(await this.sb.from('settings').upsert({ key, value, updated_at: new Date().toISOString() }).select());
   }
-  async updateParameter(id: string, patch: Partial<Parameter>) { unwrap(await this.sb.from('evaluation_parameters').update(patch).eq('id', id).select()); }
+  async updateParameter(id: string, patch: Partial<Parameter>) { this.invalidate(); unwrap(await this.sb.from('evaluation_parameters').update(patch).eq('id', id).select()); }
   async createParameter(p: Omit<Parameter, 'id'>) { unwrap(await this.sb.from('evaluation_parameters').insert(p).select()); }
-  async upsertEmployee(e: Partial<Employee> & { email: string; full_name: string }) {
+  async upsertEmployee(e: Partial<Employee> & { email: string; full_name: string }) { this.invalidate();
     const row = { ...e, email: e.email.trim().toLowerCase() };
     unwrap(await (e.id ? this.sb.from('employees').update(row).eq('id', e.id).select() : this.sb.from('employees').insert(row).select()));
     // also block/unblock the login itself (bans the auth user and revokes sessions)
@@ -274,12 +307,12 @@ export class SupabaseRepo implements Repo {
     if (error) throw new Error(await fnErrorMessage(error));
     if (data?.error) throw new Error(data.error);
   }
-  async upsertTeam(t: Partial<Team> & { name: string }) {
+  async upsertTeam(t: Partial<Team> & { name: string }) { this.invalidate();
     unwrap(await (t.id ? this.sb.from('teams').update({ name: t.name, lead_id: t.lead_id ?? null }).eq('id', t.id).select()
       : this.sb.from('teams').insert({ name: t.name, lead_id: t.lead_id ?? null }).select()));
   }
-  async deleteTeam(id: string) { unwrap(await this.sb.from('teams').delete().eq('id', id).select()); }
-  async importEvaluations(rows: unknown[], meta: { source: string; file_name: string; publish_new_periods: boolean }, onProgress?: (d: number, t: number) => void) {
+  async deleteTeam(id: string) { this.invalidate(); unwrap(await this.sb.from('teams').delete().eq('id', id).select()); }
+  async importEvaluations(rows: unknown[], meta: { source: string; file_name: string; publish_new_periods: boolean }, onProgress?: (d: number, t: number) => void) { this.invalidate();
     let batch_id: string | null = null;
     const total = { total: 0, inserted: 0, duplicates: 0, rejected: 0 };
     const parts = chunks(rows, 400);
@@ -294,7 +327,7 @@ export class SupabaseRepo implements Repo {
     }
     return { batch_id: batch_id ?? '', ...total };
   }
-  async syncGoogleSheet(scope: 'live' | 'all') {
+  async syncGoogleSheet(scope: 'live' | 'all') { this.invalidate();
     const { data, error } = await this.sb.functions.invoke('sheets-sync', { body: { scope } });
     if (error) throw new Error(await fnErrorMessage(error));
     if (data?.error) throw new Error(data.error);

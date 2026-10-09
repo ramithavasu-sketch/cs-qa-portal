@@ -29,7 +29,7 @@ export default function QaDashboard() {
   const [appealStatus, setAppealStatus] = useState<'' | AppealStatus>('');
   const [camPick, setCamPick] = useState('');
   const [category, setCategory] = useState('');
-  const data = useScopeData(sel, undefined, 26);
+  const data = useScopeData(sel, undefined, 13); // one quarter of trend for everyone in scope
   // Evaluation categories = parameter sections (e.g. IB Call Soft Skills / Technical Skills), without rubric-version suffixes.
   const catOf = (sec: string | null) => (sec ?? '').split(' · ')[0];
   const categories = [...new Set(ref.parameters.filter((p) => p.active && p.section).map((p) => catOf(p.section)))].sort();
