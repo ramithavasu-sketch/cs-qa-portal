@@ -134,7 +134,7 @@ export interface PortalSettings {
     send_on_publish: boolean;
   };
   /** Feedback sessions every few audit weeks: Setmore booking link and cycle numbering. */
-  feedback: { booking_url: string; anchor_number: number; anchor_start: string; weeks_per_cycle: number; book_by_days: number };
+  feedback: { booking_url: string; /** Google Form CAMs fill in after the session */ form_url?: string; anchor_number: number; anchor_start: string; weeks_per_cycle: number; book_by_days: number };
 }
 
 // Weekly report email — wording taken from the QA team's current CAM email instructions.

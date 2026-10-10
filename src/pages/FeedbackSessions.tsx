@@ -67,6 +67,7 @@ export default function FeedbackSessionsPage() {
           {!qa && mine.length === 0 && others.length === 0 && <EmptyState title={`Nothing to book for Session ${cycle.number}`} body="You had no audits in this cycle's weeks." />}
         </>)}
       </>)}
+      {me!.role === 'super_admin' && <LinksCard />}
       {qa && <NewCycle nextNumber={(cycles.data?.[0]?.number ?? (ref.settings.feedback?.anchor_number ?? 22) - 1) + 1} />}
     </div>
   );
@@ -81,6 +82,7 @@ function MySession({ s, weekNames }: { s: FeedbackSession; weekNames: string }) 
   const [err, setErr] = useState<unknown>(null);
   const [editing, setEditing] = useState(s.status === 'not_booked');
   const url = ref.settings.feedback?.booking_url;
+  const form = ref.settings.feedback?.form_url;
   const save = async () => {
     setBusy(true); setErr(null);
     try { await repo.markFeedbackBooked(s.id, new Date(when).toISOString()); toast('Booking saved. Your Team Lead and QA can see it.'); setEditing(false); bump(); }
@@ -96,9 +98,12 @@ function MySession({ s, weekNames }: { s: FeedbackSession; weekNames: string }) 
             <div><div className="text-[12px] text-muted">Book on or before</div><div className={'text-[15px] font-semibold ' + (overdue(s) ? 'text-bad' : '')}>{fmtDate(s.book_by)}{overdue(s) ? ' (overdue)' : ''}</div></div>
           </div>
           {s.status === 'completed' ? <p className="rounded bg-good-soft px-3 py-2 text-good">Session completed{s.completed_at ? ` on ${fmtDate(s.completed_at)}` : ''}. Thank you for filling in the feedback form.</p> : (<>
-            {s.status === 'booked' && !editing && (
+            {s.status === 'booked' && !editing && (<>
               <p className="rounded bg-info-soft px-3 py-2 text-info">Booked for <strong>{fmtDateTime(s.booked_for)}</strong>. <button className="font-semibold underline" onClick={() => setEditing(true)}>Change time</button></p>
-            )}
+              <div>After the session, fill in the feedback form. The portal marks the session completed when your response arrives.
+                <div className="mt-2">{form ? <a href={form} target="_blank" rel="noreferrer"><Button type="button" variant="secondary"><ExternalLink className="h-4 w-4" />Open feedback form</Button></a>
+                  : <span className="text-warn">QA has not added the feedback form link yet.</span>}</div></div>
+            </>)}
             {editing && (
               <ol className="flex flex-col gap-3">
                 <li><strong>1.</strong> Book a slot with <strong>{s.provider_name ?? 'your QA provider'}</strong> in Setmore, and invite {s.lead_name ? <strong>{s.lead_name}</strong> : 'your Team Lead'}.
@@ -110,7 +115,9 @@ function MySession({ s, weekNames }: { s: FeedbackSession; weekNames: string }) 
                     <Button variant="secondary" loading={busy} disabled={!when} onClick={save}><CalendarCheck className="h-4 w-4" />Save my booking</Button>
                     {s.status === 'booked' && <Button variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>}
                   </div></li>
-                <li className="text-muted"><strong>3.</strong> After the session, fill in the feedback form. The portal marks the session completed when your response arrives.</li>
+                <li><strong>3.</strong> After the session, fill in the feedback form. The portal marks the session completed when your response arrives.
+                  <div className="mt-2">{form ? <a href={form} target="_blank" rel="noreferrer"><Button type="button" variant="secondary"><ExternalLink className="h-4 w-4" />Open feedback form</Button></a>
+                    : <span className="text-warn">QA has not added the feedback form link yet.</span>}</div></li>
               </ol>
             )}
             <ErrorBox error={err} />
@@ -296,4 +303,29 @@ function NewCycle({ nextNumber }: { nextNumber: number }) {
       </div>
     </Modal>
   </>);
+}
+
+function LinksCard() {
+  const ref = useRef_();
+  const toast = useToast();
+  const { reloadRef } = useApp();
+  const f = ref.settings.feedback;
+  const [booking, setBooking] = useState(f?.booking_url ?? '');
+  const [form, setForm] = useState(f?.form_url ?? '');
+  const [busy, setBusy] = useState(false);
+  const ok = (u: string) => !u || /^https:\/\//.test(u.trim());
+  return (
+    <Card title="Links shown to CAMs" subtitle="Super Admin only." actions={<Button size="sm" loading={busy} disabled={!ok(booking) || !ok(form) || (booking === (f?.booking_url ?? '') && form === (f?.form_url ?? ''))}
+      onClick={async () => {
+        setBusy(true);
+        try { await repo.updateSetting('feedback', { ...f, booking_url: booking.trim(), form_url: form.trim() }); await reloadRef(); toast('Links saved.'); }
+        catch (e) { toast(e instanceof Error ? e.message : String(e), 'bad'); } finally { setBusy(false); }
+      }}>Save links</Button>}>
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="Setmore booking link" htmlFor="fl-book" hint={ok(booking) ? undefined : 'Start the link with https://'}><input id="fl-book" className={inputCls} value={booking} onChange={(e) => setBooking(e.target.value)} /></Field>
+        <Field label="Feedback form link (Google Form)" htmlFor="fl-form" hint={ok(form) ? 'Open the form, click Send → link icon, copy the link and paste it here.' : 'Start the link with https://'}>
+          <input id="fl-form" className={inputCls} placeholder="https://forms.gle/…" value={form} onChange={(e) => setForm(e.target.value)} /></Field>
+      </div>
+    </Card>
+  );
 }
