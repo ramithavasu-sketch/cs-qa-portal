@@ -384,6 +384,7 @@ export class SupabaseRepo implements Repo {
     return (data ?? []) as import('../lib/types').FeedbackSession[];
   }
   async markFeedbackBooked(sessionId: string, when: string) { await this.rpc('mark_feedback_booked', { p_session: sessionId, p_when: when }); }
+  async clearFeedbackBooking(sessionId: string) { await this.rpc('clear_feedback_booking', { p_session: sessionId }); }
   async updateFeedbackSession(sessionId: string, patch: { providerId?: string; status?: import('../lib/types').FeedbackStatus }) {
     await this.rpc('update_feedback_session', { p_session: sessionId, p_provider: patch.providerId ?? null, p_status: patch.status ?? null });
   }

@@ -3,7 +3,7 @@ import { CalendarCheck, ExternalLink, RefreshCw } from 'lucide-react';
 import { useApp, useAsync, useRef_ } from '../app/context';
 import { repo } from '../data';
 import { PageHeader } from '../components/Layout';
-import { Button, Card, EmptyState, ErrorBox, Field, Kpi, Loading, Modal, Pill, Table, td, th, inputBase, inputCls, useToast } from '../components/ui';
+import { Button, Card, ConfirmModal, EmptyState, ErrorBox, Field, Kpi, Loading, Modal, Pill, Table, td, th, inputBase, inputCls, useToast } from '../components/ui';
 import { fmtDate, fmtDateTime, isQaRole } from '../lib/metrics';
 import type { FeedbackSession, FeedbackStatus } from '../lib/types';
 
@@ -81,6 +81,7 @@ function MySession({ s, weekNames }: { s: FeedbackSession; weekNames: string }) 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const [editing, setEditing] = useState(s.status === 'not_booked');
+  const [removing, setRemoving] = useState(false);
   const url = ref.settings.feedback?.booking_url;
   const form = ref.settings.feedback?.form_url;
   const save = async () => {
@@ -99,7 +100,8 @@ function MySession({ s, weekNames }: { s: FeedbackSession; weekNames: string }) 
           </div>
           {s.status === 'completed' ? <p className="rounded bg-good-soft px-3 py-2 text-good">Session completed{s.completed_at ? ` on ${fmtDate(s.completed_at)}` : ''}. Thank you for filling in the feedback form.</p> : (<>
             {s.status === 'booked' && !editing && (<>
-              <p className="rounded bg-info-soft px-3 py-2 text-info">Booked for <strong>{fmtDateTime(s.booked_for)}</strong>. <button className="font-semibold underline" onClick={() => setEditing(true)}>Change time</button></p>
+              <p className="rounded bg-info-soft px-3 py-2 text-info">Booked for <strong>{fmtDateTime(s.booked_for)}</strong>. <button className="font-semibold underline" onClick={() => setEditing(true)}>Change time</button>
+                {' · '}<button className="font-semibold underline" onClick={() => setRemoving(true)}>Remove booking</button></p>
               <div>After the session, fill in the feedback form. The portal marks the session completed when your response arrives.
                 <div className="mt-2">{form ? <a href={form} target="_blank" rel="noreferrer"><Button type="button" variant="secondary"><ExternalLink className="h-4 w-4" />Open feedback form</Button></a>
                   : <span className="text-warn">QA has not added the feedback form link yet.</span>}</div></div>
@@ -123,6 +125,9 @@ function MySession({ s, weekNames }: { s: FeedbackSession; weekNames: string }) 
             <ErrorBox error={err} />
           </>)}
           <WeekBreakdown s={s} />
+          <ConfirmModal open={removing} title="Remove this booking?" confirmLabel="Remove booking" danger onClose={() => setRemoving(false)}
+            onConfirm={async () => { await repo.clearFeedbackBooking(s.id); setWhen(''); setEditing(true); toast('Booking removed. Your session shows as Not booked again.'); bump(); }}
+            body={<p>Your session on <strong>{fmtDateTime(s.booked_for)}</strong> will show as <strong>Not booked</strong> again for you, your Team Lead and QA. This only changes the portal; if you booked in Setmore, cancel it there too.</p>} />
         </div>
       )}
     </Card>

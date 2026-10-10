@@ -103,6 +103,8 @@ export interface Repo {
   listFeedbackSessions(cycleId?: string): Promise<FeedbackSession[]>;
   /** CAM (or QA): record the time booked in Setmore. */
   markFeedbackBooked(sessionId: string, when: string): Promise<void>;
+  /** CAM (or QA): remove a recorded booking (back to Not booked). */
+  clearFeedbackBooking(sessionId: string): Promise<void>;
   /** QA: change the provider and/or status. */
   updateFeedbackSession(sessionId: string, patch: { providerId?: string; status?: FeedbackStatus }): Promise<void>;
   /** QA: build or refresh a cycle from the audits in its weeks (keeps manual changes). */

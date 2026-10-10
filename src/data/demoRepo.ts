@@ -1308,6 +1308,12 @@ export class DemoRepo implements Repo {
     this.require(!!s && (s.cam_id === this.me().id || this.isQa()), 'Only the CAM (or QA) can record this booking');
     this.fb.set(sessionId, { ...this.fb.get(sessionId), status: 'booked', booked_for: when, booked_at: nowIso() });
   }
+  async clearFeedbackBooking(sessionId: string) {
+    const s = (await this.listFeedbackSessions()).find((x) => x.id === sessionId);
+    this.require(!!s && (s.cam_id === this.me().id || this.isQa()), 'Only the CAM (or QA) can remove this booking');
+    this.require(s!.status === 'booked', 'There is no booking to remove');
+    this.fb.set(sessionId, { ...this.fb.get(sessionId), status: 'not_booked', booked_for: null, booked_at: null });
+  }
   async updateFeedbackSession(sessionId: string, patch: { providerId?: string; status?: import('../lib/types').FeedbackStatus }) {
     this.require(this.isQa(), 'Only QA can change feedback sessions');
     const pr = patch.providerId ? this.s.employees.find((e) => e.id === patch.providerId) : undefined;
