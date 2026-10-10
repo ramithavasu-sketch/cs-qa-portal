@@ -8,6 +8,7 @@ import { PageHeader } from '../components/Layout';
 import { PeriodPicker, usePeriodSelection } from '../components/PeriodPicker';
 import { Button, Card, EmptyState, ErrorBox, Loading, inputBase } from '../components/ui';
 import { InsightsPanel, ParameterAnalysis } from '../components/shared';
+import { CamDeepDive, WeekCompare } from '../components/ParameterDeepDive';
 import { isQaRole, isReportee, buildInsights, fmtDateTime, METRIC_DEFINITIONS } from '../lib/metrics';
 
 export function ParametersPage() {
@@ -17,10 +18,11 @@ export function ParametersPage() {
   const [cam, setCam] = useState(me!.role === 'user' ? me!.id : '');
   const data = useScopeData(sel, cam ? [cam] : undefined);
   const cams = ref.employees.filter((e) => isReportee(e) && e.id !== me!.id && (isQaRole(me!.role) || (me!.role === 'admin' && ref.teams.some((t) => t.id === e.team_id && t.lead_id === me!.id))));
+  const camName = cam === me!.id ? me!.full_name : ref.employees.find((e) => e.id === cam)?.full_name ?? '';
   const insights = useMemo(() => buildInsights(data.cur, data.prev, data.history, data.historyWeeks, ref.parameters, ref.taskTypeNames, ref.settings), [data, ref]);
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Parameter-Level Performance Analysis" subtitle="Every parameter uses its own maximum score from the QA rubric for that task type."
+      <PageHeader title="Parameter-Level Performance Analysis" subtitle="Every parameter uses its own maximum score from the QA rubric for that task type. Choose a CAM for a deep dive; compare any weeks at the bottom."
         actions={<>
           {me!.role !== 'user' && <><label htmlFor="pa-cam" className="sr-only">CAM</label><select id="pa-cam" className={inputBase + ' w-auto'} value={cam} onChange={(e) => setCam(e.target.value)}><option value="">{me!.role === 'admin' ? 'Whole team' : 'All CAMs'}</option>{cams.map((c) => <option key={c.id} value={c.id}>{c.full_name}</option>)}</select></>}
           <PeriodPicker sel={sel} onChange={setSel} periods={periods} />
@@ -29,6 +31,10 @@ export function ParametersPage() {
       {data.loading ? <Loading /> : (<>
         <Card title="Parameters" subtitle={`${sel.label} vs ${sel.previousLabel}`}><ParameterAnalysis cur={data.cur} prev={data.prev} parameters={ref.parameters} taskTypeNames={ref.taskTypeNames} settings={ref.settings} /></Card>
         {data.cur.length > 0 && <Card title="Strengths and improvement areas"><InsightsPanel insights={insights} /></Card>}
+        {cam && <CamDeepDive camName={camName} cur={data.cur} prev={data.prev} sel={sel}
+          compareLabel={isQaRole(me!.role) ? 'All CAMs' : me!.role === 'admin' ? 'Your team' : null} />}
+        <WeekCompare camIds={cam ? [cam] : undefined} periods={isQaRole(me!.role) ? ref.periods : ref.publishedPeriods}
+          scopeLabel={cam ? camName : me!.role === 'admin' ? 'Your whole team' : 'All CAMs'} />
         <Card title="Metric definitions">
           <dl className="grid gap-3 md:grid-cols-2">{Object.entries(METRIC_DEFINITIONS).map(([k, v]) => <div key={k}><dt className="text-[13px] font-semibold">{k}</dt><dd className="text-[12.5px] text-muted">{v}</dd></div>)}</dl>
         </Card>
