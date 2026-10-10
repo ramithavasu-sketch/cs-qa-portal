@@ -6,7 +6,7 @@ const mmdd = (d: string) => `${d.slice(5, 7)}/${d.slice(8, 10)}`;
 
 /** Link to a page of the portal. Google Apps Script web apps (…/exec) take the page as ?p=, other hosts use #/. */
 export function portalLink(portalUrl: string, path: string) {
-  const base = (portalUrl || '').replace(/\/+$/, '');
+  const base = (portalUrl || '').replace(/[/#]+$/, '');
   return /\/exec$|script\.google\.com/.test(base) ? `${base}?p=${encodeURIComponent(path)}` : `${base}/#${path}`;
 }
 export function reportLink(settings: PortalSettings, period: Period) {
