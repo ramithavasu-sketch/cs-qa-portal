@@ -353,6 +353,11 @@ export function appealDeadlineOf(publishedAt: string | null, s: PortalSettings, 
   if (!publishedAt) return null;
   const w = s.appeal_window;
   let d = new Date(publishedAt);
+  if (w.close_dow && w.close_dow >= 1 && w.close_dow <= 7) {
+    // first chosen weekday after the publish date, at 11:59 pm (mirrors the SQL appeal_deadline)
+    const isoDow = (x: Date) => ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(new Intl.DateTimeFormat('en-US', { timeZone: s.reporting.timezone || 'UTC', weekday: 'short' }).format(x)) + 1;
+    for (let i = 1; i <= 7; i++) { const c = new Date(d.getTime() + i * 86400000); if (isoDow(c) === w.close_dow) return endOfDayIn(c, s.reporting.timezone); }
+  }
   if (!w.business_days) d = new Date(d.getTime() + w.days * 86400000);
   else { let added = 0; while (added < w.days) { d.setDate(d.getDate() + 1); if (d.getDay() !== 0 && d.getDay() !== 6) added += 1; } }
   return w.end_of_day ? endOfDayIn(d, s.reporting.timezone) : d;

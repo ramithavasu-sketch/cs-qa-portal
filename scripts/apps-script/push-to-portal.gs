@@ -23,6 +23,9 @@
  */
 
 const PORTAL_PUSH_URL = 'https://fjctcwhhugkvxfsotzjc.supabase.co/functions/v1/sheets-push';
+// Weekly reminder emailed to you (the sheet owner) shortly before you publish the week.
+const PORTAL_SITE_URL = 'https://ramithavasu-sketch.github.io/csqa-portal/#';
+const REMINDER = { weekday: 4, time: '23:54', timezone: 'Asia/Kolkata' };   // Thursday (1 = Mon … 7 = Sun), 11:54 pm IST
 
 /** Tabs to send. source: 'live' for the live form (new weeks arrive as drafts), 'archive' for past years (published). */
 const TABS = [
@@ -204,9 +207,36 @@ function everyMinute() {
   const out = [];
   try { out.push(sendPortalEmails()); } catch (e) { out.push('Emails: ' + e.message); }
   try { out.push(pullScoreChanges()); } catch (e) { out.push('Score changes: ' + e.message); }
+  try { out.push(publishReminder()); } catch (e) { out.push('Reminder: ' + e.message); }
   console.log(out.join('\n'));
   return out.join('\n');
 }
+
+/** Once a week at REMINDER time: email yourself a heads-up to publish the week and send the report emails. */
+function publishReminder(force) {
+  const now = new Date();
+  const day = Number(Utilities.formatDate(now, REMINDER.timezone, 'u'));
+  const hm = Utilities.formatDate(now, REMINDER.timezone, 'HH:mm');
+  const today = Utilities.formatDate(now, REMINDER.timezone, 'yyyy-MM-dd');
+  if (!force) {
+    if (day !== REMINDER.weekday || hm < REMINDER.time || hm > '23:58') return 'No reminder due';
+    const props = PropertiesService.getDocumentProperties();
+    if (props.getProperty('publish_reminder_sent') === today) return 'Reminder already sent today';
+    props.setProperty('publish_reminder_sent', today);
+  }
+  const weekEnd = Utilities.formatDate(new Date(now.getTime() - 86400000), REMINDER.timezone, 'EEE d MMM');
+  const me = Session.getEffectiveUser().getEmail();
+  const html = '<p>Heads-up: in about 5 minutes (11:59 pm) it is time to publish this week\'s QA report.</p>' +
+    '<ol><li><a href="' + PORTAL_SITE_URL + '/admin/periods">Publish the audit week</a> that ended ' + weekEnd + ' (Reporting Periods). Appeals then stay open until next Wednesday 11:59 pm.</li>' +
+    '<li><a href="' + PORTAL_SITE_URL + '/admin/emails">Send the weekly report emails</a> to all CAMs (Weekly Report Emails → Send → tick the box → Yes, send).</li></ol>' +
+    '<p>This reminder comes from the script in your QA audit sheet.</p>';
+  MailApp.sendEmail({ to: me, subject: 'Reminder: publish the QA report and send emails at 11:59 pm', htmlBody: html,
+    body: html.replace(/<li>/g, '- ').replace(/<[^>]+>/g, ' '), name: 'CS QA Portal' });
+  return 'Publish reminder emailed to ' + me;
+}
+
+/** Run once to see what the weekly reminder looks like (emails it to you right away). */
+function testPublishReminder() { return publishReminder(true); }
 
 /** Sends the portal's queued emails from your Gmail and tells the portal which ones went out. */
 function sendPortalEmails() {
