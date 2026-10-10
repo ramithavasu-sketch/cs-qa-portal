@@ -23,5 +23,16 @@ class CrashScreen extends Component<{ children: ReactNode }, { error: Error | nu
   }
 }
 
+// After the portal is updated, an open tab may ask for files from the previous version
+// (e.g. the PDF tool) that no longer exist. Reload once to pick up the new version.
+window.addEventListener('vite:preloadError', (event) => {
+  let last = 0;
+  try { last = Number(sessionStorage.getItem('portal-reloaded-at') || 0); } catch { /* storage unavailable */ }
+  if (Date.now() - last < 30_000) return;   // already reloaded just now: show the error instead of looping
+  event.preventDefault();
+  try { sessionStorage.setItem('portal-reloaded-at', String(Date.now())); } catch { /* storage unavailable */ }
+  location.reload();
+});
+
 const start = () => createRoot(document.getElementById('root')!).render(<StrictMode><CrashScreen><App /></CrashScreen></StrictMode>);
 if (isGoogle) applyGoogleDeepLink().then(start, start); else start();
