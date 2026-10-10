@@ -161,6 +161,8 @@ export interface FeedbackSession {
   cam_id: string; cam_name: string; cam_email: string; lead_id: string | null; lead_name: string | null;
   provider_id: string | null; provider_name: string | null; provider_auto: boolean; weeks: FeedbackWeek[];
   status: FeedbackStatus; booked_for: string | null; booked_at: string | null; completed_at: string | null;
+  /** who recorded the booking: the CAM, QA, or the Setmore 'Booked Sessions' sheet */
+  booking_source?: 'cam' | 'qa' | 'sheet' | null;
 }
 export interface FeedbackResponse {
   id: string; submitted_at: string; cam_email: string; cam_id: string | null; provider_name: string | null; lead_present: string | null;

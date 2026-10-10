@@ -65,6 +65,13 @@ Deno.serve(async (req) => {
       if (error) throw new HttpError(500, error.message);
       return json(data);
     }
+    // Setmore bookings from the Feedback Sessions sheet's "Booked Sessions" tab.
+    if (body?.action === 'feedback_bookings') {
+      const rows = Array.isArray((body as { rows?: unknown }).rows) ? (body as { rows: unknown[] }).rows.slice(0, 2000) : [];
+      const { data, error } = await serviceClient().rpc('ingest_feedback_bookings', { p_rows: rows });
+      if (error) throw new HttpError(500, error.message);
+      return json(data);
+    }
     // The latest feedback cycles, laid out for the Feedback Sessions sheet.
     if (body?.action === 'feedback_feed') {
       const { data, error } = await serviceClient().rpc('feedback_sheet_feed');

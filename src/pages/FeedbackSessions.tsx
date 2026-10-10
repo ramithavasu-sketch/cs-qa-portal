@@ -100,7 +100,7 @@ function MySession({ s, weekNames }: { s: FeedbackSession; weekNames: string }) 
           </div>
           {s.status === 'completed' ? <p className="rounded bg-good-soft px-3 py-2 text-good">Session completed{s.completed_at ? ` on ${fmtDate(s.completed_at)}` : ''}. Thank you for filling in the feedback form.</p> : (<>
             {s.status === 'booked' && !editing && (<>
-              <p className="rounded bg-info-soft px-3 py-2 text-info">Booked for <strong>{fmtDateTime(s.booked_for)}</strong>. <button className="font-semibold underline" onClick={() => setEditing(true)}>Change time</button>
+              <p className="rounded bg-info-soft px-3 py-2 text-info">Booked for <strong>{fmtDateTime(s.booked_for)}</strong>{s.booking_source === 'sheet' ? ' (from Setmore)' : ''}. <button className="font-semibold underline" onClick={() => setEditing(true)}>Change time</button>
                 {' · '}<button className="font-semibold underline" onClick={() => setRemoving(true)}>Remove booking</button></p>
               <div>After the session, fill in the feedback form. The portal marks the session completed when your response arrives.
                 <div className="mt-2">{form ? <a href={form} target="_blank" rel="noreferrer"><Button type="button" variant="secondary"><ExternalLink className="h-4 w-4" />Open feedback form</Button></a>
@@ -111,7 +111,7 @@ function MySession({ s, weekNames }: { s: FeedbackSession; weekNames: string }) 
                 <li><strong>1.</strong> Book a slot with <strong>{s.provider_name ?? 'your QA provider'}</strong> in Setmore, and invite {s.lead_name ? <strong>{s.lead_name}</strong> : 'your Team Lead'}.
                   <div className="mt-2">{url ? <a href={url} target="_blank" rel="noreferrer"><Button type="button"><ExternalLink className="h-4 w-4" />Book in Setmore</Button></a>
                     : <span className="text-warn">QA has not added the booking link yet.</span>}</div></li>
-                <li><strong>2.</strong> Enter the date and time you booked, so your Lead and QA can see it.
+                <li><strong>2.</strong> Your booking shows here automatically once it reaches the Setmore booking sheet (usually within 10 minutes). If it doesn't, enter the date and time yourself.
                   <div className="mt-2 flex flex-wrap items-end gap-2">
                     <input aria-label="Booked date and time" type="datetime-local" className={inputBase + ' w-auto'} value={when} onChange={(e) => setWhen(e.target.value)} />
                     <Button variant="secondary" loading={busy} disabled={!when} onClick={save}><CalendarCheck className="h-4 w-4" />Save my booking</Button>
@@ -228,7 +228,7 @@ function QaView({ cycle, weekNames, list }: { cycle: { id: string; number: numbe
               </select>
               {overdue(s) && <div className="text-[11.5px] text-bad">Overdue</div>}
             </td>
-            <td className={td + ' whitespace-nowrap'}>{s.booked_for ? fmtDateTime(s.booked_for) : '—'}</td>
+            <td className={td + ' whitespace-nowrap'}>{s.booked_for ? fmtDateTime(s.booked_for) : '—'}{s.booking_source && <div className="text-[11px] text-muted">{{ sheet: 'From Setmore', cam: 'Entered by CAM', qa: 'Entered by QA' }[s.booking_source]}</div>}</td>
           </tr>
         ))}</tbody>
       </Table>

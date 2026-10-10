@@ -63,6 +63,9 @@ function pushToPortalLocked() {
     if (lastRow < 2) { summary.push(`${tab.name}: no rows`); continue; }
     const header = sheet.getRange(1, 1, 1, lastCol).getDisplayValues()[0];
     const key = 'pushed_up_to:' + tab.name;
+    // If the tab got shorter than where we stopped last time (rows deleted, sorted or moved),
+    // start again from the top: rows already in the portal are skipped as duplicates.
+    if (Number(props.getProperty(key) || 0) > lastRow) props.deleteProperty(key);
     let from = Math.max(2, Number(props.getProperty(key) || 1) + 1 - OVERLAP);
     let totals = { inserted: 0, duplicates: 0, rejected: 0 };
 
@@ -210,6 +213,7 @@ function everyMinute() {
   try { out.push(publishReminder()); } catch (e) { out.push('Reminder: ' + e.message); }
   if (new Date().getMinutes() % 10 === 0) {   // feedback sessions: every 10 minutes is plenty
     try { out.push(pushFeedbackResponses()); } catch (e) { out.push('Feedback responses: ' + e.message); }
+    try { out.push(pushFeedbackBookings()); } catch (e) { out.push('Feedback bookings: ' + e.message); }
     try { out.push(writeFeedbackSheet()); } catch (e) { out.push('Feedback sheet: ' + e.message); }
   }
   console.log(out.join('\n'));
@@ -275,6 +279,35 @@ function pushFeedbackResponses() {
   return 'Feedback responses: ' + rows.length + ' sent, ' + (res.new || 0) + ' new, ' + (res.completed || 0) + ' sessions marked completed';
 }
 
+/** Sends the Setmore bookings ("Booked Sessions" tab of the Feedback Sessions sheet) to the portal. */
+function pushFeedbackBookings() {
+  const id = (PropertiesService.getScriptProperties().getProperty('FEEDBACK_SHEET_ID') || '').trim();
+  if (!id) return 'Feedback bookings: add Script Property FEEDBACK_SHEET_ID first';
+  const tabName = PropertiesService.getScriptProperties().getProperty('FEEDBACK_BOOKINGS_TAB') || 'Booked Sessions';
+  const sheet = SpreadsheetApp.openById(id).getSheetByName(tabName);
+  if (!sheet) return 'Feedback bookings: tab "' + tabName + '" not found';
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return 'Feedback bookings: no bookings in "' + tabName + '" yet';
+  const head = values[0].map((h) => String(h).trim().toLowerCase());
+  const col = (name) => head.findIndex((h) => h.startsWith(name));
+  const c = { date: col('date'), cam: col('cam'), provider: col('provider'), status: col('session status') >= 0 ? col('session status') : col('status') };
+  if (c.date < 0 || c.cam < 0) return 'Feedback bookings: Date / CAM Name columns not found';
+  const when = (v) => {
+    if (v instanceof Date) return v.toISOString();
+    const m = String(v).trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})[ T]+(\d{1,2}):(\d{2})\s*(AM|PM)?/i);   // e.g. 2026-09-29 10:30 PM (India time)
+    if (!m) return '';
+    let h = Number(m[4]) % 12; if (!m[6] || /pm/i.test(m[6])) h = m[6] ? h + 12 : Number(m[4]);
+    const pad = (n) => String(n).padStart(2, '0');
+    return m[1] + '-' + pad(m[2]) + '-' + pad(m[3]) + 'T' + pad(h) + ':' + m[5] + ':00+05:30';
+  };
+  const rows = values.slice(1).map((r) => ({ date: when(r[c.date]), cam_name: String(r[c.cam] || '').trim(),
+    provider_name: c.provider < 0 ? '' : String(r[c.provider] || '').trim(), status: c.status < 0 ? '' : String(r[c.status] || '').trim() }))
+    .filter((r) => r.date && r.cam_name);
+  const res = portalCall_({ action: 'feedback_bookings', rows: rows });
+  return 'Feedback bookings: ' + rows.length + ' rows, ' + (res.updated || 0) + ' updated' +
+    ((res.unmatched || []).length ? ', not matched to a CAM: ' + res.unmatched.join(', ') : '');
+}
+
 /** Writes each recent cycle into the Feedback Sessions spreadsheet, in the same layout as before. */
 function writeFeedbackSheet() {
   const id = (PropertiesService.getScriptProperties().getProperty('FEEDBACK_SHEET_ID') || '').trim();
@@ -303,9 +336,7 @@ function writeFeedbackSheet() {
     const provs = Object.keys(byProv).sort((a, b) => byProv[b].length - byProv[a].length);
     const depth = Math.max(0, ...provs.map((p) => byProv[p].length));
     const provRows = provs.length ? [provs].concat(Array.from({ length: depth }, (_, i) => provs.map((p) => byProv[p][i] || ''))) : [['No sessions']];
-    const booked = [['Date', 'CAM Name', 'Provider Name', 'Session Status']].concat(rows.filter((r) => r.booked_for || r.status === 'completed').map((r) =>
-      [r.booked_for ? Utilities.formatDate(new Date(r.booked_for), REMINDER.timezone, 'yyyy-MM-dd h:mm a') : '', r.cam_name, r.provider_full || '', label[r.status] || r.status]));
-    const tabs = [['Audit Data (' + nums + ')', auditRows], ['Feedback Session-' + cy.number + '(WK -' + nums + ') - Provider', provRows], ['Booked Sessions (WK -' + nums + ')', booked]];
+    const tabs = [['Audit Data (' + nums + ')', auditRows], ['Feedback Session-' + cy.number + '(WK -' + nums + ') - Provider', provRows]];
     const hash = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(tabs)));
     if (props.getProperty('fb_sheet:' + cy.number) === hash) { out.push('Session ' + cy.number + ' unchanged'); continue; }
     for (const [name, data] of tabs) {
@@ -320,7 +351,7 @@ function writeFeedbackSheet() {
 }
 
 /** Run once to send the feedback responses and fill the Feedback Sessions sheet right away. */
-function syncFeedbackNow() { const a = pushFeedbackResponses(); const b = writeFeedbackSheet(); console.log(a + '\n' + b); return a + '\n' + b; }
+function syncFeedbackNow() { const t = [pushFeedbackResponses(), pushFeedbackBookings(), writeFeedbackSheet()].join('\n'); console.log(t); return t; }
 
 /** Run once to see what the weekly reminder looks like (emails it to you right away). */
 function testPublishReminder() { return publishReminder(true); }
