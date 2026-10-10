@@ -24,8 +24,8 @@ export default function WeeklyEmailsPage() {
   const [previewCam, setPreviewCam] = useState<string>('');
   const [result, setResult] = useState<Awaited<ReturnType<typeof repo.sendWeeklyEmails>> | null>(null);
   const s = ref.settings;
-  const list = rows.data ?? [];
-  const sendable = list.filter((r) => r.cam_active && r.cam_email);
+  const list = (rows.data ?? []).filter((r) => r.cam_active); // inactive CAMs (leavers) never get report emails
+  const sendable = list.filter((r) => r.cam_email);
   const notYet = sendable.filter((r) => !r.last_status || r.last_status === 'failed');
   const missingLead = list.filter((r) => !r.lead_email);
   const portalMissing = isLocal || (!isDemo && !s.notifications.portal_url);
