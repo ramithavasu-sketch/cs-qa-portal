@@ -1,6 +1,5 @@
 import { Fragment, useMemo, useState } from 'react';
 import { Copy, Eye, EyeOff, KeyRound, RefreshCw } from 'lucide-react';
-import { Link } from 'react-router-dom';
 import Papa from 'papaparse';
 import { useApp, useAsync, useRef_ } from '../app/context';
 import { repo, isDemo, isLocal, isGoogle } from '../data';
@@ -456,7 +455,7 @@ export function PeriodsPage() {
             <tr key={p.id}>
               <td className={td + ' font-medium'}>{p.label}</td><td className={td + ' text-muted'}>{fmtRange(p.start_date, p.end_date)}</td>
               <td className={td}>{p.status === 'published' ? <Pill tone="good">Published</Pill> : <Pill tone="warn">Draft — QA only</Pill>}</td>
-              <td className={td + ' text-muted'}>{fmtDateTime(p.published_at)}</td>
+              <td className={td + ' text-muted'}>{p.status === 'published' ? fmtDateTime(p.published_at) : '—'}</td>
               <td className={td}>{p.status === 'published' ? <span className="text-faint">—</span> : <>
                 <label htmlFor={`ap-${p.id}`} className="sr-only">Auto publish</label>
                 <input id={`ap-${p.id}`} type="datetime-local" className={inputBase + ' w-auto'} defaultValue={p.auto_publish_at ? toLocalInput(p.auto_publish_at) : ''} onBlur={(e) => saveAutoPublish(p, e.target.value)} />
@@ -472,10 +471,10 @@ export function PeriodsPage() {
               </td>
               <td className={td}><Button size="sm" variant={p.status === 'published' ? 'ghost' : 'primary'} loading={busy === p.id} onClick={async () => {
                 setBusy(p.id);
-                try { await repo.setPeriodStatus(p.id, p.status === 'published' ? 'draft' : 'published'); await reloadRef(); toast(p.status === 'published' ? `${p.short_label} unpublished.` : `${p.short_label} published. CAMs see it now; use “Email CAMs” to send the weekly emails.`); }
+                try { await repo.setPeriodStatus(p.id, p.status === 'published' ? 'draft' : 'published'); await reloadRef(); toast(p.status === 'published' ? `${p.short_label} unpublished.` : `${p.short_label} published. CAMs and Team Leads can see this week now.`); }
                 catch (x) { toast((x as Error).message, 'bad'); } finally { setBusy(null); }
               }}>{p.status === 'published' ? 'Unpublish' : 'Publish'}</Button>
-                {p.status === 'published' && <Link to={`/admin/emails?period=${p.id}`} className="ml-2 text-[12.5px] font-medium text-brand hover:underline">Email CAMs</Link>}</td>
+</td>
             </tr>
           ))}</tbody>
         </Table>
