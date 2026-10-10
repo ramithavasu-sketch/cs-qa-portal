@@ -32,11 +32,17 @@ update public.reporting_periods set appeal_closes_at = null where id = public.ti
 select public.assert_true(public.appeal_deadline(public.tid('ev_b1')) < now(), 'cleared date falls back to the appeal-window rule');
 update public.reporting_periods set published_at = now() where id = public.tid('period');
 -- 7 calendar days, closing at 11:59 pm in the portal time zone (Asia/Kolkata)
-update public.settings set value = value || '{"days": 7, "business_days": false, "end_of_day": true}'::jsonb where key = 'appeal_window';
+update public.settings set value = value || '{"days": 7, "business_days": false, "end_of_day": true, "close_dow": null}'::jsonb where key = 'appeal_window';
 update public.settings set value = value || '{"timezone": "Asia/Kolkata"}'::jsonb where key = 'reporting';
 update public.reporting_periods set published_at = '2026-10-08 10:00:00+05:30' where id = public.tid('period');
 select public.assert_true(public.appeal_deadline(public.tid('ev_b1')) = '2026-10-15 23:59:59+05:30'::timestamptz, 'published 8 Oct 10:00 IST closes 15 Oct 23:59:59 IST');
 update public.reporting_periods set published_at = '2026-10-08 23:30:00+05:30' where id = public.tid('period');
 select public.assert_true(public.appeal_deadline(public.tid('ev_b1')) = '2026-10-15 23:59:59+05:30'::timestamptz, 'late-evening publication still closes at 23:59 on day 7');
+-- QA team rule: publish Thursday 11:59 pm, appeals close the next Wednesday 11:59 pm
+update public.settings set value = value || '{"close_dow": 3}'::jsonb where key = 'appeal_window';
+update public.reporting_periods set published_at = '2026-10-15 23:59:00+05:30' where id = public.tid('period');
+select public.assert_true(public.appeal_deadline(public.tid('ev_b1')) = '2026-10-21 23:59:59+05:30'::timestamptz, 'published Thu 15 Oct 23:59 IST closes Wed 21 Oct 23:59:59 IST');
+update public.reporting_periods set published_at = '2026-10-16 00:05:00+05:30' where id = public.tid('period');
+select public.assert_true(public.appeal_deadline(public.tid('ev_b1')) = '2026-10-21 23:59:59+05:30'::timestamptz, 'publishing a few minutes late still closes that Wednesday');
 update public.reporting_periods set published_at = now() where id = public.tid('period');
 \echo '--- appeal close date assertions passed ---'

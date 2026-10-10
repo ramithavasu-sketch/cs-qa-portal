@@ -7,6 +7,7 @@
 // Auth: header `x-push-secret` must equal the SHEETS_PUSH_SECRET function secret.
 // Body: { source: 'live' | 'archive', label?: string, header: string[], rows: string[][], first_row: number }
 //   or  { action: 'changes', since?: ISO timestamp }  → score changes made in the portal since then
+//   or  { action: 'feedback_responses', rows: [...] } / { action: 'feedback_feed' }  → feedback sessions
 import { json, serviceClient, HttpError } from '../_shared/auth.ts';
 import { mapAuditRows, rowsToRecords } from '../_shared/mapper.ts';
 
@@ -57,6 +58,20 @@ Deno.serve(async (req) => {
       return json({ ok: true });
     }
 
+    // Feedback session form answers (QA only in the portal); a response marks that CAM's open session completed.
+    if (body?.action === 'feedback_responses') {
+      const rows = Array.isArray((body as { rows?: unknown }).rows) ? (body as { rows: unknown[] }).rows.slice(0, 2000) : [];
+      const { data, error } = await serviceClient().rpc('ingest_feedback_responses', { p_rows: rows });
+      if (error) throw new HttpError(500, error.message);
+      return json(data);
+    }
+    // The latest feedback cycles, laid out for the Feedback Sessions sheet.
+    if (body?.action === 'feedback_feed') {
+      const { data, error } = await serviceClient().rpc('feedback_sheet_feed');
+      if (error) throw new HttpError(500, error.message);
+      return json({ cycles: data ?? [] });
+    }
+
     // Score changes made in the portal (appeals, QA corrections), for writing back to the sheet.
     if (body?.action === 'changes') {
       const since = body.since && !Number.isNaN(Date.parse(body.since)) ? body.since : null;
@@ -104,6 +119,7 @@ Deno.serve(async (req) => {
       await admin.from('import_rejections').insert(mapped.rejections.map((x) => ({ batch_id, row_number: x.row_number, reason: x.reason })));
       await admin.from('import_batches').update({ rejected: totals.rejected + mapped.rejections.length }).eq('id', batch_id);
     }
+    if (totals.inserted > 0) await admin.rpc('refresh_open_feedback_cycles').then(() => {}, () => {});   // providers follow new audits
     return json({ rows: rows.length, ...totals, rejected: totals.rejected + mapped.rejections.length, batch_id });
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : String(e) }, e instanceof HttpError ? e.status : 500);

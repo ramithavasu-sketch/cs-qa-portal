@@ -3,8 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   LayoutDashboard, ListChecks, BarChart3, FileText, Download, Scale, Bell, Users, UsersRound, SlidersHorizontal,
-  CalendarCog, Upload, ScrollText, Mail, LogOut, Menu, X, ShieldCheck, ClipboardCheck,
-} from 'lucide-react';
+  CalendarCog, Upload, ScrollText, Mail, LogOut, Menu, X, ShieldCheck, ClipboardCheck, MessagesSquare } from 'lucide-react';
 import { useApp, useAsync } from '../app/context';
 import { repo, demoRepo, localRepo, isGoogle } from '../data';
 import { AutoSheetSync } from './SheetSync';
@@ -20,6 +19,7 @@ const MAIN: NavItem[] = [
   { to: '/reports', label: 'Report History', icon: FileText },
   { to: '/downloads', label: 'Download Reports', icon: Download },
   { to: '/appeals', label: 'Appeals', icon: Scale },
+  { to: '/feedback-sessions', label: 'Feedback Sessions', icon: MessagesSquare },
   { to: '/my-audits', label: 'My Audits', icon: ClipboardCheck, roles: ['super_admin', 'evaluator'] },
   { to: '/notifications', label: 'Notifications', icon: Bell },
 ];

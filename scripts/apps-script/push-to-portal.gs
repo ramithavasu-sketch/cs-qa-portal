@@ -208,6 +208,10 @@ function everyMinute() {
   try { out.push(sendPortalEmails()); } catch (e) { out.push('Emails: ' + e.message); }
   try { out.push(pullScoreChanges()); } catch (e) { out.push('Score changes: ' + e.message); }
   try { out.push(publishReminder()); } catch (e) { out.push('Reminder: ' + e.message); }
+  if (new Date().getMinutes() % 10 === 0) {   // feedback sessions: every 10 minutes is plenty
+    try { out.push(pushFeedbackResponses()); } catch (e) { out.push('Feedback responses: ' + e.message); }
+    try { out.push(writeFeedbackSheet()); } catch (e) { out.push('Feedback sheet: ' + e.message); }
+  }
   console.log(out.join('\n'));
   return out.join('\n');
 }
@@ -234,6 +238,89 @@ function publishReminder(force) {
     body: html.replace(/<li>/g, '- ').replace(/<[^>]+>/g, ' '), name: 'CS QA Portal' });
   return 'Publish reminder emailed to ' + me;
 }
+
+// ---------------------------------------------------------------- feedback sessions
+// Form responses: the tab in THIS sheet whose header has "Session Provider" (or Script Property FEEDBACK_RESPONSES_TAB).
+// Session lists: written into your "Feedback Sessions" spreadsheet; put its ID (the long part of its link
+// between /d/ and /edit) in Script Property FEEDBACK_SHEET_ID.
+
+function portalCall_(payload) {
+  const secret = (PropertiesService.getScriptProperties().getProperty('PORTAL_PUSH_SECRET') || '').trim().replace(/^['"]+|['"]+$/g, '').trim();
+  if (!secret) throw new Error('Add PORTAL_PUSH_SECRET under Project Settings → Script Properties first.');
+  const res = UrlFetchApp.fetch(PORTAL_PUSH_URL, { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { 'x-push-secret': secret }, payload: JSON.stringify(payload) });
+  const body = JSON.parse(res.getContentText() || '{}');
+  if (res.getResponseCode() !== 200) throw new Error('Portal refused the request: ' + (body.error || res.getResponseCode()));
+  return body;
+}
+
+/** Sends the feedback form answers to the portal (QA-only page). A new answer marks that CAM's session completed. */
+function pushFeedbackResponses() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const named = PropertiesService.getScriptProperties().getProperty('FEEDBACK_RESPONSES_TAB');
+  const sheet = named ? ss.getSheetByName(named) : ss.getSheets().find((sh) => sh.getLastColumn() > 0 &&
+    sh.getRange(1, 1, 1, Math.min(sh.getLastColumn(), 30)).getDisplayValues()[0].some((h) => String(h).trim() === 'Session Provider'));
+  if (!sheet) return 'Feedback responses: no tab with a "Session Provider" column';
+  const values = sheet.getDataRange().getValues();
+  const head = values[0].map((h) => String(h).trim());
+  const col = (name) => head.findIndex((h) => h.toLowerCase().startsWith(name.toLowerCase()));
+  const c = { at: col('Timestamp'), email: col('Email Address'), provider: col('Session Provider'), lead_present: col('Team Lead Present'),
+    agrees: col('Do you agree'), feedback: col('Feedback for the Session Provider'), lead_name: col('Lead Name'), qa: col('QA Feedback') };
+  if (c.at < 0 || c.email < 0) return 'Feedback responses: Timestamp / Email Address columns not found';
+  const v = (r, i) => (i < 0 ? '' : String(r[i] == null ? '' : r[i]).trim());
+  const rows = values.slice(1).filter((r) => r[c.at] instanceof Date && v(r, c.email)).map((r) => ({
+    submitted_at: r[c.at].toISOString(), email: v(r, c.email), provider: v(r, c.provider), lead_present: v(r, c.lead_present),
+    agrees: v(r, c.agrees), feedback: v(r, c.feedback), lead_name: v(r, c.lead_name), qa_feedback: v(r, c.qa) }));
+  const res = portalCall_({ action: 'feedback_responses', rows: rows });
+  return 'Feedback responses: ' + rows.length + ' sent, ' + (res.new || 0) + ' new, ' + (res.completed || 0) + ' sessions marked completed';
+}
+
+/** Writes each recent cycle into the Feedback Sessions spreadsheet, in the same layout as before. */
+function writeFeedbackSheet() {
+  const id = (PropertiesService.getScriptProperties().getProperty('FEEDBACK_SHEET_ID') || '').trim();
+  if (!id) return 'Feedback sheet: add Script Property FEEDBACK_SHEET_ID to fill the Feedback Sessions sheet';
+  const cycles = portalCall_({ action: 'feedback_feed' }).cycles || [];
+  if (!cycles.length) return 'Feedback sheet: no released cycle yet';
+  const book = SpreadsheetApp.openById(id);
+  const props = PropertiesService.getDocumentProperties();
+  const ord = (n) => n + ([, 'st', 'nd', 'rd'][(n % 100 >> 3 ^ 1) && n % 10] || 'th');
+  const out = [];
+  for (const cy of cycles) {
+    const nums = cy.weeks.map((w) => String(w).replace(/\D+/g, '')).join(',');
+    const due = cy.book_by ? new Date(cy.book_by + 'T00:00:00') : null;
+    const dueText = due ? ord(due.getDate()) + ' ' + Utilities.formatDate(due, Session.getScriptTimeZone(), 'MMM') : '—';
+    const label = { not_booked: 'Not booked', booked: 'Booked', completed: 'Completed', cancelled: 'Cancelled', no_audit: 'No audit' };
+    const rows = cy.rows.filter((r) => r.status !== 'no_audit');
+    const audit = [['Last Date to book session on or before  ' + dueText, '', '', '', '', '', '', ''],
+      ['Booking Link : ' + (cy.booking_url || ''), '', '', '', '', '', '', ''],
+      ['CAM'].concat(cy.weeks.map((w) => String(w).replace('-', ' - ')), [ord(cy.number) + ' Feedback Session', 'Lead Name', 'Session Status', 'Booked For'])]
+      .concat(rows.map((r) => [r.cam_email].concat(r.weeks, [r.provider, r.lead_name || '', label[r.status] || r.status,
+        r.booked_for ? Utilities.formatDate(new Date(r.booked_for), REMINDER.timezone, 'yyyy-MM-dd h:mm a') : ''])));
+    const width = audit[2].length;
+    const auditRows = audit.map((r) => r.concat(Array(Math.max(0, width - r.length)).fill('')).slice(0, width));
+    const byProv = {};
+    rows.forEach((r) => { if (r.provider) (byProv[r.provider] = byProv[r.provider] || []).push(r.cam_email); });
+    const provs = Object.keys(byProv).sort((a, b) => byProv[b].length - byProv[a].length);
+    const depth = Math.max(0, ...provs.map((p) => byProv[p].length));
+    const provRows = provs.length ? [provs].concat(Array.from({ length: depth }, (_, i) => provs.map((p) => byProv[p][i] || ''))) : [['No sessions']];
+    const booked = [['Date', 'CAM Name', 'Provider Name', 'Session Status']].concat(rows.filter((r) => r.booked_for || r.status === 'completed').map((r) =>
+      [r.booked_for ? Utilities.formatDate(new Date(r.booked_for), REMINDER.timezone, 'yyyy-MM-dd h:mm a') : '', r.cam_name, r.provider_full || '', label[r.status] || r.status]));
+    const tabs = [['Audit Data (' + nums + ')', auditRows], ['Feedback Session-' + cy.number + '(WK -' + nums + ') - Provider', provRows], ['Booked Sessions (WK -' + nums + ')', booked]];
+    const hash = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(tabs)));
+    if (props.getProperty('fb_sheet:' + cy.number) === hash) { out.push('Session ' + cy.number + ' unchanged'); continue; }
+    for (const [name, data] of tabs) {
+      const sh = book.getSheetByName(name) || book.insertSheet(name);
+      sh.clearContents();
+      sh.getRange(1, 1, data.length, data[0].length).setValues(data);
+    }
+    props.setProperty('fb_sheet:' + cy.number, hash);
+    out.push('Session ' + cy.number + ' written (' + rows.length + ' CAMs)');
+  }
+  return 'Feedback sheet: ' + out.join('; ');
+}
+
+/** Run once to send the feedback responses and fill the Feedback Sessions sheet right away. */
+function syncFeedbackNow() { const a = pushFeedbackResponses(); const b = writeFeedbackSheet(); console.log(a + '\n' + b); return a + '\n' + b; }
 
 /** Run once to see what the weekly reminder looks like (emails it to you right away). */
 function testPublishReminder() { return publishReminder(true); }

@@ -151,3 +151,18 @@ export interface TeamMappingRow { cam_email: string; cam_name?: string; lead_ema
 export interface TeamMappingResult { rows: number; new_leads: number; new_teams: number; new_cams: number; reassigned: number; rejected: number; errors: { row: number; reason: string }[] }
 export interface HistoricalCam { id: string; name: string; tasks: number; first_week: string | null; last_week: string | null; candidates: { id: string; name: string; email: string }[] }
 export interface SheetSyncResult { source: string; title?: string; inserted?: number; duplicates?: number; rejected?: number; error?: string }
+
+// ---- feedback sessions (every 3 audit weeks, CAM + Team Lead with a QA provider)
+export type FeedbackStatus = 'not_booked' | 'booked' | 'completed' | 'cancelled' | 'no_audit';
+export interface FeedbackCycle { id: string; number: number; period_ids: string[]; book_by: string | null; released_at: string | null; created_at: string }
+export interface FeedbackWeek { period_id: string; label: string; evaluator: string | null; audits: number }
+export interface FeedbackSession {
+  id: string; cycle_id: string; cycle_number: number; book_by: string | null;
+  cam_id: string; cam_name: string; cam_email: string; lead_id: string | null; lead_name: string | null;
+  provider_id: string | null; provider_name: string | null; provider_auto: boolean; weeks: FeedbackWeek[];
+  status: FeedbackStatus; booked_for: string | null; booked_at: string | null; completed_at: string | null;
+}
+export interface FeedbackResponse {
+  id: string; submitted_at: string; cam_email: string; cam_id: string | null; provider_name: string | null; lead_present: string | null;
+  agrees: string | null; feedback_for_provider: string | null; lead_name: string | null; qa_feedback: string | null; session_id: string | null;
+}

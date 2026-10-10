@@ -1272,6 +1272,51 @@ export class DemoRepo implements Repo {
     return res;
   }
 
+  // ------------------------------------------------------------------ feedback sessions (demo: computed, changes kept in memory)
+  private fb = new Map<string, Partial<import('../lib/types').FeedbackSession>>();
+  private fbCycle() {
+    const pub = this.s.periods.filter((p) => p.status === 'published').sort((x, y) => x.start_date.localeCompare(y.start_date)).slice(-3);
+    const last = pub[pub.length - 1];
+    return { id: 'demo-cycle', number: 22, period_ids: pub.map((p) => p.id), released_at: last?.published_at ?? null, created_at: nowIso(),
+      book_by: last ? new Date(Date.parse(last.end_date) + 23 * 86400000).toISOString().slice(0, 10) : null };
+  }
+  async listFeedbackCycles(): Promise<import('../lib/types').FeedbackCycle[]> { this.me(); return this.fbCycle().period_ids.length ? [this.fbCycle()] : []; }
+  async listFeedbackSessions(): Promise<import('../lib/types').FeedbackSession[]> {
+    this.me();
+    const c = this.fbCycle();
+    const weeks = c.period_ids.map((id) => this.s.periods.find((p) => p.id === id)!);
+    const out: import('../lib/types').FeedbackSession[] = [];
+    for (const cam of this.s.employees.filter((e) => e.status === 'active' && e.role === 'user' && this.canViewCam(e.id))) {
+      const w = weeks.map((p) => {
+        const n = new Map<string, number>();
+        for (const e of this.s.evaluations) if (e.cam_id === cam.id && e.period_id === p.id) n.set(e.evaluator_name ?? '?', (n.get(e.evaluator_name ?? '?') ?? 0) + 1);
+        const top = [...n.entries()].sort((x, y) => y[1] - x[1])[0];
+        return { period_id: p.id, label: p.short_label, evaluator: top?.[0] ?? null, audits: top?.[1] ?? 0 };
+      });
+      const count = new Map<string, number>(); w.forEach((x) => x.evaluator && count.set(x.evaluator, (count.get(x.evaluator) ?? 0) + 1));
+      const prov = [...count.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] ?? null;
+      const lead = this.s.employees.find((e) => e.id === this.s.teams.find((t) => t.id === cam.team_id)?.lead_id);
+      const id = 'demo-fb-' + cam.id;
+      out.push({ id, cycle_id: c.id, cycle_number: c.number, book_by: c.book_by, cam_id: cam.id, cam_name: cam.full_name, cam_email: cam.email,
+        lead_id: lead?.id ?? null, lead_name: lead?.full_name ?? null, provider_id: this.s.employees.find((e) => e.full_name === prov)?.id ?? null,
+        provider_name: prov, provider_auto: true, weeks: w, status: prov ? 'not_booked' : 'no_audit', booked_for: null, booked_at: null, completed_at: null, ...this.fb.get(id) });
+    }
+    return out.sort((x, y) => x.cam_name.localeCompare(y.cam_name));
+  }
+  async markFeedbackBooked(sessionId: string, when: string) {
+    const s = (await this.listFeedbackSessions()).find((x) => x.id === sessionId);
+    this.require(!!s && (s.cam_id === this.me().id || this.isQa()), 'Only the CAM (or QA) can record this booking');
+    this.fb.set(sessionId, { ...this.fb.get(sessionId), status: 'booked', booked_for: when, booked_at: nowIso() });
+  }
+  async updateFeedbackSession(sessionId: string, patch: { providerId?: string; status?: import('../lib/types').FeedbackStatus }) {
+    this.require(this.isQa(), 'Only QA can change feedback sessions');
+    const pr = patch.providerId ? this.s.employees.find((e) => e.id === patch.providerId) : undefined;
+    this.fb.set(sessionId, { ...this.fb.get(sessionId), ...(pr ? { provider_id: pr.id, provider_name: pr.full_name, provider_auto: false } : {}), ...(patch.status ? { status: patch.status } : {}) });
+  }
+  async buildFeedbackCycle(): Promise<string> { this.require(this.isQa(), 'Only QA can set up feedback sessions'); return 'demo-cycle'; }
+  async updateFeedbackCycle(): Promise<void> { throw new Error('In the demo the booking deadline is fixed.'); }
+  async listFeedbackResponses(): Promise<import('../lib/types').FeedbackResponse[]> { this.require(this.isQa(), 'Only QA can see feedback responses'); return []; }
+
   // ------------------------------------------------------------------ notifications
   async logExport(info: { scope: string; period: string; format: string }) {
     if (!this.meOrNull()) return;

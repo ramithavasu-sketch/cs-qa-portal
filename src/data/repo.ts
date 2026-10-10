@@ -2,6 +2,7 @@ import type {
   Appeal, AppealDetail, AppealFilter, AuditLog, Employee, Evaluation, EvaluationFilter, ExtraAdjustmentInput,
   ImportBatch, ImportRejection, LeadRecommendation, Me, NotificationRow, Parameter, Period, PortalSettings,
   QaDecisionInput, Role, ScoreAdjustment, SubmitAppealItem, TaskType, Team, WeeklyEmailRow, WeeklyEmailResult, TeamMappingRow, TeamMappingResult, HistoricalCam, SheetSyncResult,
+  FeedbackCycle, FeedbackSession, FeedbackResponse, FeedbackStatus,
 } from '../lib/types';
 import type { ImportRow } from '../../supabase/functions/_shared/mapper';
 import type { SetupFile } from './demoRepo';
@@ -96,6 +97,19 @@ export interface Repo {
   // ---- moving from local review to the Google version (local and google modes only)
   exportSetup?(): Promise<SetupFile>;
   importSetup?(file: SetupFile): Promise<{ employees: number; teams: number }>;
+
+  // ---- feedback sessions
+  listFeedbackCycles(): Promise<FeedbackCycle[]>;
+  listFeedbackSessions(cycleId?: string): Promise<FeedbackSession[]>;
+  /** CAM (or QA): record the time booked in Setmore. */
+  markFeedbackBooked(sessionId: string, when: string): Promise<void>;
+  /** QA: change the provider and/or status. */
+  updateFeedbackSession(sessionId: string, patch: { providerId?: string; status?: FeedbackStatus }): Promise<void>;
+  /** QA: build or refresh a cycle from the audits in its weeks (keeps manual changes). */
+  buildFeedbackCycle(number: number, periodIds: string[], bookBy: string | null): Promise<string>;
+  updateFeedbackCycle(cycleId: string, bookBy: string | null): Promise<void>;
+  /** QA only: the feedback form answers. */
+  listFeedbackResponses(): Promise<FeedbackResponse[]>;
 
   // ---- notifications
   listNotifications(): Promise<NotificationRow[]>;

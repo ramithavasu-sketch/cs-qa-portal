@@ -374,6 +374,27 @@ export class SupabaseRepo implements Repo {
   async historicalCams() { return this.rpc<import('../lib/types').HistoricalCam[]>('historical_cams', {}); }
   async mergeEmployee(fromId: string, intoId: string) { return this.rpc<{ moved: number }>('merge_employee', { p_from: fromId, p_into: intoId }); }
 
+  // ---------------------------------------------------------------- feedback sessions
+  async listFeedbackCycles() {
+    return unwrap(await this.sb.from('feedback_cycles').select('*').order('number', { ascending: false })) as import('../lib/types').FeedbackCycle[];
+  }
+  async listFeedbackSessions(cycleId?: string) {
+    const { data, error } = await this.sb.rpc('list_feedback_sessions', { p_cycle: cycleId ?? null });
+    if (error) throw new Error(error.message);
+    return (data ?? []) as import('../lib/types').FeedbackSession[];
+  }
+  async markFeedbackBooked(sessionId: string, when: string) { await this.rpc('mark_feedback_booked', { p_session: sessionId, p_when: when }); }
+  async updateFeedbackSession(sessionId: string, patch: { providerId?: string; status?: import('../lib/types').FeedbackStatus }) {
+    await this.rpc('update_feedback_session', { p_session: sessionId, p_provider: patch.providerId ?? null, p_status: patch.status ?? null });
+  }
+  async buildFeedbackCycle(number: number, periodIds: string[], bookBy: string | null) {
+    return this.rpc<string>('build_feedback_cycle', { p_number: number, p_period_ids: periodIds, p_book_by: bookBy });
+  }
+  async updateFeedbackCycle(cycleId: string, bookBy: string | null) { await this.rpc('update_feedback_cycle', { p_cycle: cycleId, p_book_by: bookBy }); }
+  async listFeedbackResponses() {
+    return fetchAll<import('../lib/types').FeedbackResponse>((a, b) => this.sb.from('feedback_responses').select('*').order('submitted_at', { ascending: false }).range(a, b));
+  }
+
   // ---------------------------------------------------------------- notifications
   async listNotifications() {
     return unwrap(await this.sb.from('notifications').select('*').order('created_at', { ascending: false }).limit(100)) as NotificationRow[];

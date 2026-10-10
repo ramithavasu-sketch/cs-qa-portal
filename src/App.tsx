@@ -15,6 +15,7 @@ import { ReportsPage, DownloadsPage } from './pages/Reports';
 import { ParametersPage, NotificationsPage } from './pages/Misc';
 import { UsersPage, TeamsPage, ScoringPage, PeriodsPage, ImportPage, AuditLogPage } from './pages/Admin';
 import WeeklyEmailsPage from './pages/WeeklyEmails';
+import FeedbackSessionsPage from './pages/FeedbackSessions';
 import type { Role } from './lib/types';
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -75,6 +76,7 @@ export default function App() {
               <Route path="appeals/new" element={<RequireRole roles={['user']}><NewAppealPage /></RequireRole>} />
               <Route path="appeals/:id" element={<AppealDetailPage />} />
               <Route path="notifications" element={<NotificationsPage />} />
+              <Route path="feedback-sessions" element={<FeedbackSessionsPage />} />
               <Route path="admin/users" element={<RequireRole roles={QA}><UsersPage /></RequireRole>} />
               <Route path="admin/teams" element={<RequireRole roles={QA}><TeamsPage /></RequireRole>} />
               <Route path="admin/scoring" element={<RequireRole roles={QA}><ScoringPage /></RequireRole>} />

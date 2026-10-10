@@ -133,6 +133,8 @@ export interface PortalSettings {
     extra_cc: string;
     send_on_publish: boolean;
   };
+  /** Feedback sessions every few audit weeks: Setmore booking link and cycle numbering. */
+  feedback: { booking_url: string; anchor_number: number; anchor_start: string; weeks_per_cycle: number; book_by_days: number };
 }
 
 // Weekly report email — wording taken from the QA team's current CAM email instructions.
@@ -167,6 +169,7 @@ export const DEFAULT_SETTINGS: PortalSettings = {
     extra_cc: '',
     send_on_publish: false,
   },
+  feedback: { booking_url: 'https://qaanywhereworks.setmore.com/book?step=staff&products=04932840-f23f-4dfa-9b79-ebe915086d79&type=service', anchor_number: 22, anchor_start: '2026-09-17', weeks_per_cycle: 3, book_by_days: 23 },
 };
 
 export const SETTING_DESCRIPTIONS: Record<keyof PortalSettings, string> = {
@@ -178,4 +181,5 @@ export const SETTING_DESCRIPTIONS: Record<keyof PortalSettings, string> = {
   notifications: 'In-app / email notification switches (email requires the send-email function)',
   data_sources: 'Google Sheets the portal imports audits from (live form + archives)',
   report_email: 'Weekly QA report email sent to each CAM (CC: Team Lead) when a week is published',
+  feedback: 'Feedback sessions: booking link, cycle numbering (anchor) and booking deadline (days after the last week ends)',
 };
