@@ -15,7 +15,7 @@ const STATUS: Record<FeedbackStatus, { label: string; tone: 'neutral' | 'good' |
   no_audit: { label: 'No audits this cycle', tone: 'neutral' },
 };
 const StatusPill = ({ s }: { s: FeedbackStatus }) => <Pill tone={STATUS[s].tone}>{STATUS[s].label}</Pill>;
-const overdue = (f: FeedbackSession) => f.status === 'not_booked' && !!f.book_by && f.book_by < new Date().toISOString().slice(0, 10);
+const overdue = (f: FeedbackSession) => (f.status === 'not_booked' || f.status === 'cancelled') && !!f.book_by && f.book_by < new Date().toISOString().slice(0, 10);
 /** value for <input type="datetime-local"> in the browser's time zone */
 const toLocalInput = (iso: string | null) => {
   if (!iso) return '';
@@ -80,7 +80,7 @@ function MySession({ s, weekNames }: { s: FeedbackSession; weekNames: string }) 
   const [when, setWhen] = useState(toLocalInput(s.booked_for));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
-  const [editing, setEditing] = useState(s.status === 'not_booked');
+  const [editing, setEditing] = useState(s.status === 'not_booked' || s.status === 'cancelled');
   const [removing, setRemoving] = useState(false);
   const url = ref.settings.feedback?.booking_url;
   const form = ref.settings.feedback?.form_url;
@@ -101,11 +101,12 @@ function MySession({ s, weekNames }: { s: FeedbackSession; weekNames: string }) 
           {s.status === 'completed' ? <p className="rounded bg-good-soft px-3 py-2 text-good">Session completed{s.completed_at ? ` on ${fmtDate(s.completed_at)}` : ''}. Thank you for filling in the feedback form.</p> : (<>
             {s.status === 'booked' && !editing && (<>
               <p className="rounded bg-info-soft px-3 py-2 text-info">Booked for <strong>{fmtDateTime(s.booked_for)}</strong>{s.booking_source === 'sheet' ? ' (from Setmore)' : ''}. <button className="font-semibold underline" onClick={() => setEditing(true)}>Change time</button>
-                {' · '}<button className="font-semibold underline" onClick={() => setRemoving(true)}>Remove booking</button></p>
+                {' · '}<button className="font-semibold underline" onClick={() => setRemoving(true)}>Cancel booking</button></p>
               <div>After the session, fill in the feedback form. The portal marks the session completed when your response arrives.
                 <div className="mt-2">{form ? <a href={form} target="_blank" rel="noreferrer"><Button type="button" variant="secondary"><ExternalLink className="h-4 w-4" />Open feedback form</Button></a>
                   : <span className="text-warn">QA has not added the feedback form link yet.</span>}</div></div>
             </>)}
+            {s.status === 'cancelled' && <p className="rounded bg-bad-soft px-3 py-2 text-bad">Your booking{s.booked_for ? ` for ${fmtDateTime(s.booked_for)}` : ''} was cancelled. Please book a new slot.</p>}
             {editing && (
               <ol className="flex flex-col gap-3">
                 <li><strong>1.</strong> Book a slot with <strong>{s.provider_name ?? 'your QA provider'}</strong> in Setmore, and invite {s.lead_name ? <strong>{s.lead_name}</strong> : 'your Team Lead'}.
@@ -115,7 +116,7 @@ function MySession({ s, weekNames }: { s: FeedbackSession; weekNames: string }) 
                   <div className="mt-2 flex flex-wrap items-end gap-2">
                     <input aria-label="Booked date and time" type="datetime-local" className={inputBase + ' w-auto'} value={when} onChange={(e) => setWhen(e.target.value)} />
                     <Button variant="secondary" loading={busy} disabled={!when} onClick={save}><CalendarCheck className="h-4 w-4" />Save my booking</Button>
-                    {s.status === 'booked' && <Button variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>}
+                    {s.status === 'booked' && <Button variant="ghost" onClick={() => setEditing(false)}>Keep current time</Button>}
                   </div></li>
                 <li><strong>3.</strong> After the session, fill in the feedback form. The portal marks the session completed when your response arrives.
                   <div className="mt-2">{form ? <a href={form} target="_blank" rel="noreferrer"><Button type="button" variant="secondary"><ExternalLink className="h-4 w-4" />Open feedback form</Button></a>
@@ -125,9 +126,9 @@ function MySession({ s, weekNames }: { s: FeedbackSession; weekNames: string }) 
             <ErrorBox error={err} />
           </>)}
           <WeekBreakdown s={s} />
-          <ConfirmModal open={removing} title="Remove this booking?" confirmLabel="Remove booking" danger onClose={() => setRemoving(false)}
-            onConfirm={async () => { await repo.clearFeedbackBooking(s.id); setWhen(''); setEditing(true); toast('Booking removed. Your session shows as Not booked again.'); bump(); }}
-            body={<p>Your session on <strong>{fmtDateTime(s.booked_for)}</strong> will show as <strong>Not booked</strong> again for you, your Team Lead and QA. This only changes the portal; if you booked in Setmore, cancel it there too.</p>} />
+          <ConfirmModal open={removing} title="Cancel this booking?" confirmLabel="Cancel booking" danger onClose={() => setRemoving(false)}
+            onConfirm={async () => { await repo.clearFeedbackBooking(s.id); setWhen(''); setEditing(true); toast('Booking cancelled. Please book a new slot before the deadline.'); bump(); }}
+            body={<p>Your session on <strong>{fmtDateTime(s.booked_for)}</strong> will show as <strong>Cancelled</strong> for you, your Team Lead and QA, and in the Booked Sessions sheet. Please also cancel it in Setmore, then book a new slot.</p>} />
         </div>
       )}
     </Card>

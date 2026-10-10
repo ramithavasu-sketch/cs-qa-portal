@@ -286,25 +286,37 @@ function pushFeedbackBookings() {
   const tabName = PropertiesService.getScriptProperties().getProperty('FEEDBACK_BOOKINGS_TAB') || 'Booked Sessions';
   const sheet = SpreadsheetApp.openById(id).getSheetByName(tabName);
   if (!sheet) return 'Feedback bookings: tab "' + tabName + '" not found';
-  const values = sheet.getDataRange().getValues();
+  // read dates as shown in the cell and treat them as India time (Setmore times), whatever the sheet's time zone is
+  const values = sheet.getDataRange().getDisplayValues();
   if (values.length < 2) return 'Feedback bookings: no bookings in "' + tabName + '" yet';
   const head = values[0].map((h) => String(h).trim().toLowerCase());
   const col = (name) => head.findIndex((h) => h.startsWith(name));
   const c = { date: col('date'), cam: col('cam'), provider: col('provider'), status: col('session status') >= 0 ? col('session status') : col('status') };
   if (c.date < 0 || c.cam < 0) return 'Feedback bookings: Date / CAM Name columns not found';
   const when = (v) => {
-    if (v instanceof Date) return v.toISOString();
-    const m = String(v).trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})[ T]+(\d{1,2}):(\d{2})\s*(AM|PM)?/i);   // e.g. 2026-09-29 10:30 PM (India time)
+    const t = String(v).trim();
+    let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[ T]+(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?/i);   // 2026-09-29 10:30 PM
+    if (!m) {
+      const d = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})[ ,]+(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?/i);   // 9/29/2026 22:30:00
+      if (d) m = [d[0], d[3], d[1], d[2], d[4], d[5], d[6]];
+    }
     if (!m) return '';
     let h = Number(m[4]) % 12; if (!m[6] || /pm/i.test(m[6])) h = m[6] ? h + 12 : Number(m[4]);
     const pad = (n) => String(n).padStart(2, '0');
     return m[1] + '-' + pad(m[2]) + '-' + pad(m[3]) + 'T' + pad(h) + ':' + m[5] + ':00+05:30';
   };
-  const rows = values.slice(1).map((r) => ({ date: when(r[c.date]), cam_name: String(r[c.cam] || '').trim(),
+  const rows = values.slice(1).map((r, i) => ({ row: i + 2, date: when(r[c.date]), cam_name: String(r[c.cam] || '').trim(),
     provider_name: c.provider < 0 ? '' : String(r[c.provider] || '').trim(), status: c.status < 0 ? '' : String(r[c.status] || '').trim() }))
     .filter((r) => r.date && r.cam_name);
   const res = portalCall_({ action: 'feedback_bookings', rows: rows });
-  return 'Feedback bookings: ' + rows.length + ' rows, ' + (res.updated || 0) + ' updated' +
+  // bookings the CAM cancelled in the portal: mark that row "Cancelled" here too
+  const cancel = (res.cancel_rows || []).filter((n) => n >= 2 && n <= sheet.getLastRow());
+  if (cancel.length) {
+    const statusCol = c.status >= 0 ? c.status + 1 : sheet.getLastColumn() + 1;
+    if (c.status < 0) sheet.getRange(1, statusCol).setValue('Session Status');
+    cancel.forEach((n) => sheet.getRange(n, statusCol).setValue('Cancelled'));
+  }
+  return 'Feedback bookings: ' + rows.length + ' rows, ' + (res.updated || 0) + ' updated' + (cancel.length ? ', ' + cancel.length + ' marked Cancelled' : '') +
     ((res.unmatched || []).length ? ', not matched to a CAM: ' + res.unmatched.join(', ') : '');
 }
 
