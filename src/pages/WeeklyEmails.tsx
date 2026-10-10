@@ -20,6 +20,7 @@ export default function WeeklyEmailsPage() {
   const rows = useAsync(() => (periodId ? repo.weeklyEmailPreview(periodId) : Promise.resolve([] as WeeklyEmailRow[])), [periodId]);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [confirm, setConfirm] = useState<null | { ids: string[] | null; resend: boolean; count: number; label: string }>(null);
+  const [checked, setChecked] = useState(false);
   const [previewCam, setPreviewCam] = useState<string>('');
   const [result, setResult] = useState<Awaited<ReturnType<typeof repo.sendWeeklyEmails>> | null>(null);
   const s = ref.settings;
@@ -55,8 +56,8 @@ export default function WeeklyEmailsPage() {
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <Card title={period ? `${period.short_label} recipients` : 'Recipients'} subtitle={`${list.length} CAM(s) audited · ${list.filter((r) => r.last_status === 'sent').length} sent · ${notYet.length} not sent yet`} pad={false}
           actions={<>
-            <Button disabled={!notYet.length || portalMissing} onClick={() => setConfirm({ ids: notYet.map((r) => r.cam_id), resend: false, count: notYet.length, label: 'everyone not emailed yet' })}><Send className="h-4 w-4" />Send to {notYet.length} not yet emailed</Button>
-            <Button variant="secondary" disabled={!sel.size || portalMissing} onClick={() => setConfirm({ ids: [...sel], resend: true, count: sel.size, label: 'the selected CAMs (resend)' })}>Send / resend selected ({sel.size})</Button>
+            <Button disabled={!notYet.length || portalMissing} onClick={() => { setChecked(false); setConfirm({ ids: notYet.map((r) => r.cam_id), resend: false, count: notYet.length, label: 'everyone not emailed yet' }); }}><Send className="h-4 w-4" />Send to {notYet.length} not yet emailed</Button>
+            <Button variant="secondary" disabled={!sel.size || portalMissing} onClick={() => { setChecked(false); setConfirm({ ids: [...sel], resend: true, count: sel.size, label: 'the selected CAMs (resend)' }); }}>Send / resend selected ({sel.size})</Button>
           </>}>
           {rows.loading ? <Loading /> : (
             <Table>
@@ -97,13 +98,24 @@ export default function WeeklyEmailsPage() {
 
       {me?.role === 'super_admin' && <TemplateEditor settings={s} onSaved={async () => { await reloadRef(); toast('Email template saved.'); }} />}
 
-      <ConfirmModal open={!!confirm} title="Send weekly report emails" confirmLabel={`Send ${confirm?.count ?? 0} email(s)`} onClose={() => setConfirm(null)}
+      <ConfirmModal open={!!confirm} title={`Confirm: send ${period?.short_label ?? ''} report emails?`} confirmLabel={`Yes, send ${confirm?.count ?? 0} email(s)`} confirmDisabled={!checked} onClose={() => setConfirm(null)}
         onConfirm={async () => {
           const r = await repo.sendWeeklyEmails(periodId, confirm!.ids, confirm!.resend);
           setResult(r); setSel(new Set()); bump();
           toast(r.via_sheet ? `${r.queued} email(s) queued. Your Google Sheet script sends them from your Gmail within about a minute.` : r.failed ? `${r.sent} sent, ${r.failed} failed — see the list.` : `${r.sent} email(s) sent${isDemo ? ' (demo: not delivered)' : ''}.`, r.failed ? 'bad' : 'good');
         }}
-        body={<p>Send the {period?.short_label} report email to {confirm?.count} CAM(s) ({confirm?.label}), each with their Team Lead in CC. This can’t be undone.</p>} />
+        body={<>
+          <p>You are about to email the <strong>{period?.short_label}</strong> report to <strong>{confirm?.count} CAM(s)</strong> ({confirm?.label}), each with their Team Lead in CC. Emails can’t be recalled once sent.</p>
+          <div className="max-h-56 overflow-auto rounded border border-line">
+            <table className="w-full text-[12.5px]"><thead><tr className="bg-brand-soft/30 text-left text-muted"><th className="px-2 py-1">To (CAM)</th><th className="px-2 py-1">CC (Team Lead)</th></tr></thead>
+              <tbody>{list.filter((r) => confirm?.ids?.includes(r.cam_id)).map((r) => (
+                <tr key={r.cam_id} className="border-t border-line"><td className="px-2 py-1">{r.cam_name}<div className="text-muted">{r.cam_email}</div></td>
+                  <td className="px-2 py-1">{r.lead_email ? <>{r.lead_name}<div className="text-muted">{r.lead_email}</div></> : <span className="text-warn">No CC</span>}</td></tr>
+              ))}</tbody></table>
+          </div>
+          <label className="flex items-start gap-2 font-medium"><input type="checkbox" className="mt-1" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
+            I have checked the week and the recipients above, and I want to send these emails now.</label>
+        </>} />
     </div>
   );
 }

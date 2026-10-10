@@ -180,13 +180,13 @@ export function Modal({ open, title, onClose, children, footer, wide }: { open: 
   );
 }
 
-export function ConfirmModal({ open, title, body, confirmLabel, danger, onConfirm, onClose }: { open: boolean; title: string; body: ReactNode; confirmLabel: string; danger?: boolean; onConfirm: () => Promise<void> | void; onClose: () => void }) {
+export function ConfirmModal({ open, title, body, confirmLabel, danger, confirmDisabled, onConfirm, onClose }: { open: boolean; title: string; body: ReactNode; confirmLabel: string; danger?: boolean; confirmDisabled?: boolean; onConfirm: () => Promise<void> | void; onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   return (
     <Modal open={open} title={title} onClose={onClose} footer={<>
       <Button variant="secondary" onClick={onClose}>Cancel</Button>
-      <Button variant={danger ? 'danger' : 'primary'} loading={busy} onClick={async () => { setBusy(true); setErr(null); try { await onConfirm(); onClose(); } catch (e) { setErr(e); } finally { setBusy(false); } }}>{confirmLabel}</Button>
+      <Button variant={danger ? 'danger' : 'primary'} loading={busy} disabled={confirmDisabled} onClick={async () => { setBusy(true); setErr(null); try { await onConfirm(); onClose(); } catch (e) { setErr(e); } finally { setBusy(false); } }}>{confirmLabel}</Button>
     </>}>
       <div className="flex flex-col gap-3 text-sm">{body}<ErrorBox error={err} /></div>
     </Modal>
